@@ -35,6 +35,7 @@ export default defineConfig({
         "**/active-turn-screenshots.spec.ts",
         "**/active-turn-resilience-screenshots.spec.ts",
         "**/profile-active-turn-screenshots.spec.ts",
+        "**/config-bridge-screenshots.spec.ts",
         "**/file-attachment.spec.ts",
         "**/video-attachment.spec.ts",
         "**/spoiler.spec.ts",
