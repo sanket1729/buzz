@@ -14,14 +14,19 @@ const MOCK_PUBKEY = "deadbeef".repeat(8);
 const MOCK_RELAY_URL = "ws://localhost:3000";
 const SELF_PROFILE_CACHE_KEY = `buzz-self-profile.v1:${MOCK_RELAY_URL}:${MOCK_PUBKEY}`;
 
+// Wait for mount animations to settle before screenshotting. A cancelled or
+// replaced animation's `finished` promise can hang or reject, tearing down the
+// evaluate context mid-await (AbortError). Cap each wait and swallow rejections
+// so settle() always resolves quickly without a flaky race.
 async function settle(page: import("@playwright/test").Page) {
-  await page.evaluate(() =>
-    // Tolerate cancelled animations: a SkeletonReveal animation cancelled
-    // mid-flight (skeleton → live content swap) rejects `.finished` with an
-    // AbortError. allSettled lets the animations that DO finish settle instead
-    // of aborting the whole wait on the first cancel.
-    Promise.allSettled(document.getAnimations().map((a) => a.finished)),
-  );
+  await page.evaluate(async () => {
+    const guard = (p: Promise<unknown>) =>
+      Promise.race([
+        p.catch(() => {}),
+        new Promise((resolve) => setTimeout(resolve, 1000)),
+      ]);
+    await Promise.all(document.getAnimations().map((a) => guard(a.finished)));
+  });
 }
 
 type ConnectionState =

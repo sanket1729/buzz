@@ -1,10 +1,13 @@
 import * as React from "react";
 
+import { useAppNavigation } from "@/app/navigation/useAppNavigation";
 import {
   formatDayHeading,
   isSameDay,
   startOfLocalDaySeconds,
 } from "@/features/messages/lib/dateFormatters";
+import { mergeSurfacedReplies } from "@/features/messages/lib/mergeSurfacedReplies.mjs";
+import { surfaceReplies } from "@/features/messages/lib/surfaceReplies.mjs";
 import {
   buildMainTimelineEntries,
   shouldRenderUnreadDivider,
@@ -22,6 +25,7 @@ import { cn } from "@/shared/lib/cn";
 import { DayDivider } from "./DayDivider";
 import { MessageRow } from "./MessageRow";
 import { MessageThreadSummaryRow } from "./MessageThreadSummaryRow";
+import { SurfacedReplyRow } from "./SurfacedReplyRow";
 import { SystemMessageRow } from "./SystemMessageRow";
 import { UnreadDivider } from "./UnreadDivider";
 
@@ -87,12 +91,22 @@ type TimelineMessageRowModel = {
   type: "message";
 };
 
+type TimelineSurfacedRow = {
+  key: string;
+  message: TimelineMessage;
+  type: "surfaced";
+};
+
 type TimelineRenderRow =
   | TimelineDayRow
   | TimelineUnreadRow
-  | TimelineMessageRowModel;
+  | TimelineMessageRowModel
+  | TimelineSurfacedRow;
 
-type TimelineNonDayRow = TimelineUnreadRow | TimelineMessageRowModel;
+type TimelineNonDayRow =
+  | TimelineUnreadRow
+  | TimelineMessageRowModel
+  | TimelineSurfacedRow;
 
 type TimelineDayGroup = {
   key: string;
@@ -101,18 +115,31 @@ type TimelineDayGroup = {
 };
 
 function buildTimelineRenderRows({
+  agentPubkeys,
   firstUnreadMessageId,
   messages,
 }: {
+  agentPubkeys?: ReadonlySet<string>;
   firstUnreadMessageId: string | null;
   messages: TimelineMessage[];
 }): TimelineRenderRow[] {
-  const entries = buildMainTimelineEntries(messages);
+  // Merge nested agent->human replies into the root timeline as pointers at
+  // their own createdAt. `isHuman` resolves unknown/undefined pubkeys to human
+  // so unrecognized authors under-surface (the fail-safe matching the pure-core
+  // contract); surfaceReplies is the single source of "root-level", never
+  // re-derived here.
+  const isHuman = (pubkey?: string) =>
+    pubkey == null || !agentPubkeys?.has(pubkey);
+  const merged = mergeSurfacedReplies(
+    buildMainTimelineEntries(messages),
+    surfaceReplies(messages, isHuman),
+  );
   const rows: TimelineRenderRow[] = [];
   let previousMessage: TimelineMessage | null = null;
 
-  for (let i = 0; i < entries.length; i++) {
-    const { message, summary } = entries[i];
+  for (let i = 0; i < merged.length; i++) {
+    const row = merged[i];
+    const message = row.kind === "entry" ? row.entry.message : row.message;
     const messageRenderKey = message.renderKey ?? message.id;
 
     if (
@@ -124,6 +151,19 @@ function buildTimelineRenderRows({
         label: formatDayHeading(message.createdAt),
         type: "day",
       });
+    }
+    previousMessage = message;
+
+    // Surfaced pointer rows are never a read/unread boundary — their id is a
+    // nested reply id that can never equal `firstUnreadMessageId` (a top-level
+    // id) — so they skip the divider check entirely and render as pointers.
+    if (row.kind === "surfaced") {
+      rows.push({
+        key: `surfaced:${message.id}`,
+        message,
+        type: "surfaced",
+      });
+      continue;
     }
 
     // The unread "New" divider only marks a read/unread boundary when there is
@@ -137,11 +177,9 @@ function buildTimelineRenderRows({
     rows.push({
       key: `msg:${messageRenderKey}`,
       message,
-      summary,
+      summary: row.entry.summary,
       type: "message",
     });
-
-    previousMessage = message;
   }
 
   return rows;
@@ -203,9 +241,11 @@ export const TimelineMessageList = React.memo(function TimelineMessageList({
   threadUnreadCounts,
   unfollowThreadById,
 }: TimelineMessageListProps) {
+  const { goChannel } = useAppNavigation();
   const rows = React.useMemo(
-    () => buildTimelineRenderRows({ firstUnreadMessageId, messages }),
-    [firstUnreadMessageId, messages],
+    () =>
+      buildTimelineRenderRows({ agentPubkeys, firstUnreadMessageId, messages }),
+    [agentPubkeys, firstUnreadMessageId, messages],
   );
   const dayGroups = React.useMemo(() => buildTimelineDayGroups(rows), [rows]);
 
@@ -232,6 +272,7 @@ export const TimelineMessageList = React.memo(function TimelineMessageList({
               channelType={channelType}
               currentPubkey={currentPubkey}
               followThreadById={followThreadById}
+              goChannel={goChannel}
               highlightedMessageId={highlightedMessageId}
               isFollowingThreadById={isFollowingThreadById}
               isSendingVideoReviewComment={isSendingVideoReviewComment}
@@ -263,6 +304,7 @@ type TimelineRenderRowViewProps = Omit<
   "firstUnreadMessageId" | "messages" | "personaLookup"
 > & {
   allMessages?: TimelineMessage[];
+  goChannel: ReturnType<typeof useAppNavigation>["goChannel"];
   row: TimelineRenderRow;
 };
 
@@ -274,6 +316,7 @@ const TimelineRenderRowView = React.memo(function TimelineRenderRowView({
   channelType,
   currentPubkey,
   followThreadById,
+  goChannel,
   highlightedMessageId = null,
   isFollowingThreadById,
   isSendingVideoReviewComment = false,
@@ -330,6 +373,27 @@ const TimelineRenderRowView = React.memo(function TimelineRenderRowView({
 
   if (row.type === "unread") {
     return <UnreadDivider />;
+  }
+
+  if (row.type === "surfaced") {
+    return (
+      <div className="flex flex-col gap-1">
+        <SurfacedReplyRow
+          message={row.message}
+          onNavigate={(target) => {
+            if (!channelId) return;
+            // threadRootId prefetches the thread root event in
+            // ChannelRouteScreen so the route-target open can find the head
+            // even when the root is outside the loaded window — the same
+            // mechanism search hits use to navigate down to a nested reply.
+            void goChannel(channelId, {
+              messageId: target.id,
+              threadRootId: target.rootId,
+            });
+          }}
+        />
+      </div>
+    );
   }
 
   const { message, summary } = row;

@@ -45,6 +45,7 @@ export default defineConfig({
         "**/identity-archive.spec.ts",
         "**/identity-archive-hide.spec.ts",
         "**/relay-connectivity-screenshots.spec.ts",
+        "**/reply-surfacing-screenshots.spec.ts",
         "**/unread-pill-screenshots.spec.ts",
         "**/sidebar-more-unread-overlap.spec.ts",
         "**/thread-unread-screenshots.spec.ts",
