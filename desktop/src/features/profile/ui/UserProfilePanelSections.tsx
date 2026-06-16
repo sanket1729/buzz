@@ -14,6 +14,7 @@ import {
   MessageSquare,
   Pencil,
   Server,
+  Settings,
   Terminal,
   UserMinus,
   UserPlus,
@@ -22,6 +23,7 @@ import {
 import { toast } from "sonner";
 
 import { MemorySection } from "@/features/agent-memory/ui/MemorySection";
+import { AgentConfigPanel } from "@/features/agents/ui/AgentConfigPanel";
 import { AgentStatusBadge } from "@/features/agents/ui/AgentStatusBadge";
 import { useActiveAgentTurns } from "@/features/agents/activeAgentTurnsStore";
 import { formatElapsed } from "@/features/agents/ui/agentSessionUtils";
@@ -231,6 +233,23 @@ export function ProfileSummaryView({
 
       {metadataFields.length > 0 ? (
         <ProfileFieldGroup fields={metadataFields} />
+      ) : null}
+
+      {isBot && isOwner === true && managedAgent !== undefined ? (
+        <section className="space-y-2">
+          <div className="flex items-center gap-2 px-1">
+            <Settings className="h-3.5 w-3.5 text-muted-foreground" />
+            <h4 className="text-xs font-medium text-muted-foreground">
+              Configuration
+            </h4>
+          </div>
+          <div className="rounded-2xl bg-muted/20 px-4 py-3">
+            <AgentConfigPanel
+              pubkey={managedAgent.pubkey}
+              isRunning={managedAgent.status === "running"}
+            />
+          </div>
+        </section>
       ) : null}
     </div>
   );
