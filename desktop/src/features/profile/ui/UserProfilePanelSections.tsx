@@ -232,24 +232,25 @@ export function ProfileSummaryView({
       ) : null}
 
       {metadataFields.length > 0 ? (
-        <ProfileFieldGroup fields={metadataFields} />
-      ) : null}
-
-      {isBot && isOwner === true && managedAgent !== undefined ? (
-        <section className="space-y-2">
-          <div className="flex items-center gap-2 px-1">
-            <Settings className="h-3.5 w-3.5 text-muted-foreground" />
-            <h4 className="text-xs font-medium text-muted-foreground">
-              Configuration
-            </h4>
-          </div>
-          <div className="rounded-2xl bg-muted/20 px-4 py-3">
-            <AgentConfigPanel
-              pubkey={managedAgent.pubkey}
-              isRunning={managedAgent.status === "running"}
-            />
-          </div>
-        </section>
+        <ProfileFieldGroup
+          fields={metadataFields}
+          footer={
+            isBot && isOwner === true && managedAgent !== undefined ? (
+              <div className="border-t border-border/50 px-4 py-3">
+                <div className="mb-2 flex items-center gap-2">
+                  <Settings className="h-3.5 w-3.5 text-muted-foreground" />
+                  <h4 className="text-xs font-medium text-muted-foreground">
+                    Configuration
+                  </h4>
+                </div>
+                <AgentConfigPanel
+                  pubkey={managedAgent.pubkey}
+                  isRunning={managedAgent.status === "running"}
+                />
+              </div>
+            ) : null
+          }
+        />
       ) : null}
     </div>
   );
@@ -744,7 +745,13 @@ function buildOwnerFields({
   return fields;
 }
 
-function ProfileFieldGroup({ fields }: { fields: ProfileField[] }) {
+function ProfileFieldGroup({
+  fields,
+  footer,
+}: {
+  fields: ProfileField[];
+  footer?: React.ReactNode;
+}) {
   const publicKeyLabel = "Public key";
   const ownedByLabel = "Owned by";
   const statusLabel = "Status";
@@ -776,6 +783,7 @@ function ProfileFieldGroup({ fields }: { fields: ProfileField[] }) {
         {orderedFields.map((field) => (
           <ProfileFieldRow field={field} key={field.testId ?? field.label} />
         ))}
+        {footer}
       </div>
     </section>
   );

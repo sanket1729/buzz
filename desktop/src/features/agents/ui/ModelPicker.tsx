@@ -1,4 +1,5 @@
 import { ChevronDown } from "lucide-react";
+import { toast } from "sonner";
 
 import { Spinner } from "@/shared/ui/spinner";
 import React from "react";
@@ -13,6 +14,9 @@ import {
   getAgentModels,
   updateManagedAgent,
 } from "@/shared/api/tauri";
+import { switchManagedAgentModel } from "@/shared/api/agentControl";
+import { subscribeControlResults } from "@/features/agents/observerRelayStore";
+import { useActiveAgentTurns } from "@/features/agents/activeAgentTurnsStore";
 import { Button } from "@/shared/ui/button";
 import {
   DropdownMenu,
@@ -38,6 +42,20 @@ export function ModelPicker({
   const [saving, setSaving] = React.useState(false);
   const [needsRestart, setNeedsRestart] = React.useState(false);
   const [hasRequestedModels, setHasRequestedModels] = React.useState(false);
+
+  const isRunning = agent.status === "running" || agent.status === "deployed";
+  const activeTurns = useActiveAgentTurns(agent.pubkey);
+  // A live switch rides the agent's running session(s) instead of persisting a
+  // new default. It applies only to a persona-linked running agent with at
+  // least one active turn — those are the channels the desktop can name in the
+  // `switch_model` frame (the ModelPicker has no other channel context). The
+  // harness then routes each named channel itself: a channel still mid-turn
+  // cancel-switch-requeues; one that finished between send and receipt takes
+  // the idle invalidate-and-reapply path. A persona-linked agent that is
+  // running but wholly idle has no nameable channel here, so it falls through
+  // to persisting the default (the only reachable lever from this surface).
+  const isLiveSwitch =
+    agent.personaId !== null && isRunning && activeTurns.length > 0;
 
   const fetchModels = React.useCallback(async () => {
     setLoading(true);
@@ -97,18 +115,69 @@ export function ModelPicker({
       envVar: "from env",
       configFile: "from config file",
       personaDefault: "persona default",
+      runtimeOverride: "live override",
     };
     return labels[origin] ?? null;
   }, [configSurface]);
 
+  // Send a live `switch_model` frame to each channel the agent is working in
+  // and wait for the harness to acknowledge. The model catalog is the same
+  // across all of an agent's channels, so a single `unsupported_model` result
+  // rejects the whole pick; any other status confirms the frame landed.
+  const sendLiveSwitch = React.useCallback(
+    async (modelId: string) => {
+      const channelIds = activeTurns.map((turn) => turn.channelId);
+
+      const settled = new Promise<"ok" | "unsupported">((resolve) => {
+        let unsubscribe = () => {};
+        const finish = (outcome: "ok" | "unsupported") => {
+          window.clearTimeout(timeout);
+          unsubscribe();
+          resolve(outcome);
+        };
+        // No reply in time: treat as sent. The override still rides the
+        // requeued/next session; we just can't confirm synchronously.
+        const timeout = window.setTimeout(() => finish("ok"), 8_000);
+        unsubscribe = subscribeControlResults(agent.pubkey, (frame) => {
+          if (frame.type !== "switch_model" || frame.modelId !== modelId) {
+            return;
+          }
+          finish(frame.status === "unsupported_model" ? "unsupported" : "ok");
+        });
+      });
+
+      await Promise.all(
+        channelIds.map((channelId) =>
+          switchManagedAgentModel(agent.pubkey, channelId, modelId),
+        ),
+      );
+
+      return settled;
+    },
+    [activeTurns, agent.pubkey],
+  );
+
   const handleModelChange = async (modelId: string) => {
     setSaving(true);
+    setError(null);
     try {
+      if (isLiveSwitch) {
+        const outcome = await sendLiveSwitch(modelId);
+        if (outcome === "unsupported") {
+          toast.error("That model isn't available for this agent.");
+          return;
+        }
+        toast.success("Model switched for this session.");
+        onModelChanged?.();
+        return;
+      }
+
+      // Non-live path (idle, stopped, or non-persona): persist the default.
       await updateManagedAgent({
         pubkey: agent.pubkey,
         model: modelId === modelsData?.agentDefaultModel ? null : modelId,
       });
-      if (agent.status === "running" || agent.status === "deployed") {
+      if (isRunning) {
         setNeedsRestart(true);
       }
       onModelChanged?.();
