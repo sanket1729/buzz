@@ -1,12 +1,10 @@
+pub(crate) mod agent_events;
 mod backend;
 mod discovery;
 mod env_vars;
 mod nest;
 mod persona_avatars;
 mod persona_card;
-// `publish_persona_event` / `fetch_persona_events` are #939 publishing
-// primitives not yet wired to a call site; keep them without a dead-code warn.
-#[allow(dead_code)]
 pub(crate) mod persona_events;
 mod personas;
 #[cfg(windows)]
@@ -14,10 +12,10 @@ mod process_lifecycle;
 #[cfg(feature = "mesh-llm")]
 mod relay_mesh;
 mod restore;
-#[allow(dead_code)]
 pub mod retention;
 mod runtime;
 mod storage;
+pub(crate) mod team_events;
 mod team_repair;
 mod teams;
 mod types;
