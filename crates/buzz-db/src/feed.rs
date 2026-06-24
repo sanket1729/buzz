@@ -34,7 +34,7 @@ use uuid::Uuid;
 
 use buzz_core::kind::{
     KIND_FORUM_COMMENT, KIND_FORUM_POST, KIND_JOB_PROGRESS, KIND_JOB_REQUEST, KIND_JOB_RESULT,
-    KIND_STREAM_MESSAGE, KIND_STREAM_MESSAGE_V2, KIND_STREAM_REMINDER,
+    KIND_STREAM_MESSAGE, KIND_STREAM_MESSAGE_ANON, KIND_STREAM_MESSAGE_V2, KIND_STREAM_REMINDER,
     KIND_WORKFLOW_APPROVAL_REQUESTED,
 };
 use buzz_core::StoredEvent;
@@ -100,7 +100,7 @@ pub async fn query_mentions(
     qb.push_bind(&pubkey_hex);
     qb.push(" AND e.deleted_at IS NULL");
     qb.push(format!(
-        " AND e.kind IN ({KIND_STREAM_MESSAGE}, {KIND_STREAM_MESSAGE_V2}, \
+        " AND e.kind IN ({KIND_STREAM_MESSAGE}, {KIND_STREAM_MESSAGE_V2}, {KIND_STREAM_MESSAGE_ANON}, \
          {KIND_FORUM_POST}, {KIND_FORUM_COMMENT})"
     ));
     push_channel_id_filter(&mut qb, "e.channel_id", accessible_channel_ids);
@@ -171,7 +171,7 @@ pub async fn query_activity(
         "SELECT {EVENT_COLS_UNALIASED} FROM events WHERE deleted_at IS NULL"
     ));
     qb.push(format!(
-        " AND kind IN ({KIND_STREAM_MESSAGE}, {KIND_STREAM_MESSAGE_V2}, {KIND_FORUM_POST}, \
+        " AND kind IN ({KIND_STREAM_MESSAGE}, {KIND_STREAM_MESSAGE_V2}, {KIND_STREAM_MESSAGE_ANON}, {KIND_FORUM_POST}, \
          {KIND_JOB_REQUEST}, {KIND_JOB_PROGRESS}, {KIND_JOB_RESULT})"
     ));
     push_channel_id_filter(&mut qb, "channel_id", accessible_channel_ids);
@@ -267,11 +267,13 @@ mod tests {
     #[test]
     fn mentions_query_includes_stream_message_kind() {
         use buzz_core::kind::{
-            KIND_FORUM_COMMENT, KIND_FORUM_POST, KIND_STREAM_MESSAGE, KIND_STREAM_MESSAGE_V2,
+            KIND_FORUM_COMMENT, KIND_FORUM_POST, KIND_STREAM_MESSAGE, KIND_STREAM_MESSAGE_ANON,
+            KIND_STREAM_MESSAGE_V2,
         };
         let mention_kinds: &[u32] = &[
             KIND_STREAM_MESSAGE,
             KIND_STREAM_MESSAGE_V2,
+            KIND_STREAM_MESSAGE_ANON,
             KIND_FORUM_POST,
             KIND_FORUM_COMMENT,
         ];
@@ -283,6 +285,10 @@ mod tests {
         assert!(
             mention_kinds.contains(&KIND_STREAM_MESSAGE_V2),
             "stream message v2 kind must be in mentions"
+        );
+        assert!(
+            mention_kinds.contains(&KIND_STREAM_MESSAGE_ANON),
+            "anonymous stream message kind must be in mentions"
         );
         assert!(
             mention_kinds.contains(&KIND_FORUM_POST),
@@ -313,11 +319,12 @@ mod tests {
     fn activity_query_includes_agent_job_kinds() {
         use buzz_core::kind::{
             KIND_FORUM_POST, KIND_JOB_PROGRESS, KIND_JOB_REQUEST, KIND_JOB_RESULT,
-            KIND_STREAM_MESSAGE, KIND_STREAM_MESSAGE_V2,
+            KIND_STREAM_MESSAGE, KIND_STREAM_MESSAGE_ANON, KIND_STREAM_MESSAGE_V2,
         };
         let activity_kinds: &[u32] = &[
             KIND_STREAM_MESSAGE,
             KIND_STREAM_MESSAGE_V2,
+            KIND_STREAM_MESSAGE_ANON,
             KIND_FORUM_POST,
             KIND_JOB_REQUEST,
             KIND_JOB_PROGRESS,
@@ -350,11 +357,12 @@ mod tests {
     fn activity_query_excludes_workflow_execution_kinds() {
         use buzz_core::kind::{
             KIND_FORUM_POST, KIND_JOB_PROGRESS, KIND_JOB_REQUEST, KIND_JOB_RESULT,
-            KIND_STREAM_MESSAGE, KIND_STREAM_MESSAGE_V2,
+            KIND_STREAM_MESSAGE, KIND_STREAM_MESSAGE_ANON, KIND_STREAM_MESSAGE_V2,
         };
         let activity_kinds: &[u32] = &[
             KIND_STREAM_MESSAGE,
             KIND_STREAM_MESSAGE_V2,
+            KIND_STREAM_MESSAGE_ANON,
             KIND_FORUM_POST,
             KIND_JOB_REQUEST,
             KIND_JOB_PROGRESS,
@@ -374,13 +382,14 @@ mod tests {
     fn needs_action_kinds_do_not_overlap_with_activity_kinds() {
         use buzz_core::kind::{
             KIND_FORUM_POST, KIND_JOB_PROGRESS, KIND_JOB_REQUEST, KIND_JOB_RESULT,
-            KIND_STREAM_MESSAGE, KIND_STREAM_MESSAGE_V2, KIND_STREAM_REMINDER,
-            KIND_WORKFLOW_APPROVAL_REQUESTED,
+            KIND_STREAM_MESSAGE, KIND_STREAM_MESSAGE_ANON, KIND_STREAM_MESSAGE_V2,
+            KIND_STREAM_REMINDER, KIND_WORKFLOW_APPROVAL_REQUESTED,
         };
         let needs_action_kinds: &[u32] = &[KIND_WORKFLOW_APPROVAL_REQUESTED, KIND_STREAM_REMINDER];
         let activity_kinds: &[u32] = &[
             KIND_STREAM_MESSAGE,
             KIND_STREAM_MESSAGE_V2,
+            KIND_STREAM_MESSAGE_ANON,
             KIND_FORUM_POST,
             KIND_JOB_REQUEST,
             KIND_JOB_PROGRESS,

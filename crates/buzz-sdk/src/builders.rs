@@ -8,8 +8,8 @@ use buzz_core::{
         KIND_AGENT_OBSERVER_FRAME, KIND_APPROVAL_DENY, KIND_APPROVAL_GRANT, KIND_DELETION,
         KIND_DM_ADD_MEMBER, KIND_DM_OPEN, KIND_EMOJI_SET, KIND_GIT_ISSUE, KIND_GIT_PATCH,
         KIND_GIT_REPO_ANNOUNCEMENT, KIND_GIT_STATUS_CLOSED, KIND_GIT_STATUS_DRAFT,
-        KIND_GIT_STATUS_MERGED, KIND_GIT_STATUS_OPEN, KIND_PRESENCE_UPDATE, KIND_WORKFLOW_DEF,
-        KIND_WORKFLOW_TRIGGER,
+        KIND_GIT_STATUS_MERGED, KIND_GIT_STATUS_OPEN, KIND_PRESENCE_UPDATE,
+        KIND_STREAM_MESSAGE_ANON, KIND_WORKFLOW_DEF, KIND_WORKFLOW_TRIGGER,
     },
     observer::{
         content_looks_like_nip44, OBSERVER_AGENT_TAG, OBSERVER_FRAME_CONTROL, OBSERVER_FRAME_TAG,
@@ -82,6 +82,23 @@ fn check_hex_exact(s: &str, len: usize, field: &str) -> Result<String, SdkError>
         )));
     }
     Ok(s.to_ascii_lowercase())
+}
+
+fn check_lowercase_hex_min(s: &str, min_len: usize, field: &str) -> Result<(), SdkError> {
+    if s.len() < min_len || s.len() % 2 != 0 {
+        return Err(SdkError::InvalidInput(format!(
+            "{field} must be even-length lowercase hex with at least {min_len} characters"
+        )));
+    }
+    if !s
+        .chars()
+        .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
+    {
+        return Err(SdkError::InvalidInput(format!(
+            "{field} must be lowercase hex"
+        )));
+    }
+    Ok(())
 }
 
 /// Validate a git repo identifier: `[a-zA-Z0-9._-]{1,64}`, no leading dot,
@@ -207,6 +224,18 @@ fn imeta_tags(media_tags: &[Vec<String>], tags: &mut Vec<Tag>) -> Result<(), Sdk
     Ok(())
 }
 
+fn reject_reserved_ring_sig_tags(media_tags: &[Vec<String>]) -> Result<(), SdkError> {
+    if media_tags
+        .iter()
+        .any(|mt| mt.first().map(String::as_str) == Some("ring_sig"))
+    {
+        return Err(SdkError::InvalidInput(
+            "media_tags must not contain reserved ring_sig tags".into(),
+        ));
+    }
+    Ok(())
+}
+
 // ── Builder 1: build_message ─────────────────────────────────────────────────
 
 /// Build a stream message (kind 9).
@@ -236,6 +265,38 @@ pub fn build_message(
     }
     imeta_tags(media_tags, &mut tags)?;
     Ok(EventBuilder::new(Kind::Custom(9), content).tags(tags))
+}
+
+/// Build an anonymous stream message (kind 40009) carrying a v1 SAG `ring_sig` artifact.
+///
+/// The caller must compute `artifact_hex` with `buzz-ring-sig` over this exact event body:
+/// kind 40009, `content`, `thread_ref`, `mentions`, `broadcast`, and `media_tags`, excluding
+/// the final `ring_sig` tag per the frozen ring-signature spec.
+pub fn build_anonymous_message(
+    channel_id: Uuid,
+    content: &str,
+    thread_ref: Option<&ThreadRef>,
+    mentions: &[&str],
+    broadcast: bool,
+    media_tags: &[Vec<String>],
+    artifact_hex: &str,
+) -> Result<EventBuilder, SdkError> {
+    check_content(content, 64 * 1024)?;
+    // Minimum wire artifact is N=2: 64*N+36 bytes, encoded as lowercase hex.
+    check_lowercase_hex_min(artifact_hex, 328, "artifact_hex")?;
+    reject_reserved_ring_sig_tags(media_tags)?;
+
+    let mut tags = vec![tag(&["h", &channel_id.to_string()])?];
+    if let Some(tr) = thread_ref {
+        thread_tags(tr, &mut tags)?;
+    }
+    mention_tags(mentions, &mut tags)?;
+    if broadcast {
+        tags.push(tag(&["broadcast", "1"])?);
+    }
+    imeta_tags(media_tags, &mut tags)?;
+    tags.push(tag(&["ring_sig", artifact_hex, "buzz-ring-sag-v1"])?);
+    Ok(EventBuilder::new(Kind::Custom(KIND_STREAM_MESSAGE_ANON as u16), content).tags(tags))
 }
 
 // ── Builder: build_agent_observer_frame ─────────────────────────────────────
@@ -1631,6 +1692,50 @@ mod tests {
         let cid = uuid();
         let max = "x".repeat(64 * 1024);
         assert!(build_message(cid, &max, None, &[], false, &[]).is_ok());
+    }
+
+    #[test]
+    fn anonymous_message_happy_path() {
+        let cid = uuid();
+        let artifact = "ab".repeat(164);
+        let ev =
+            sign(build_anonymous_message(cid, "anon", None, &[], false, &[], &artifact).unwrap());
+        assert_eq!(ev.kind.as_u16(), KIND_STREAM_MESSAGE_ANON as u16);
+        assert_eq!(ev.content, "anon");
+        assert!(has_tag(&ev, "h", &cid.to_string()));
+        let ring_sig_tags: Vec<_> = ev
+            .tags
+            .iter()
+            .filter(|t| t.as_slice().first().map(|v| v.as_str()) == Some("ring_sig"))
+            .collect();
+        assert_eq!(ring_sig_tags.len(), 1);
+        assert!(ring_sig_tags.iter().any(|t| {
+            let s = t.as_slice();
+            s.first().map(|v| v.as_str()) == Some("ring_sig")
+                && s.get(1).map(|v| v.as_str()) == Some(artifact.as_str())
+                && s.get(2).map(|v| v.as_str()) == Some("buzz-ring-sag-v1")
+        }));
+    }
+
+    #[test]
+    fn anonymous_message_rejects_non_lowercase_artifact_hex() {
+        let cid = uuid();
+        let artifact = "AB".repeat(164);
+        let result = build_anonymous_message(cid, "anon", None, &[], false, &[], &artifact);
+        assert!(matches!(result, Err(SdkError::InvalidInput(_))));
+    }
+
+    #[test]
+    fn anonymous_message_rejects_caller_supplied_ring_sig_tag() {
+        let cid = uuid();
+        let artifact = "ab".repeat(164);
+        let media_tags = vec![vec![
+            "ring_sig".to_string(),
+            "cd".repeat(164),
+            "buzz-ring-sag-v1".to_string(),
+        ]];
+        let result = build_anonymous_message(cid, "anon", None, &[], false, &media_tags, &artifact);
+        assert!(matches!(result, Err(SdkError::InvalidInput(_))));
     }
 
     // ── build_forum_post ─────────────────────────────────────────────────────

@@ -281,7 +281,7 @@ pub async fn cmd_get_messages(
     let limit = limit.unwrap_or(50).min(200);
 
     let mut filter = serde_json::json!({
-        "kinds": [9, 40002, 40008, 45001, 45003],
+        "kinds": [9, 40002, 40008, 40009, 45001, 45003],
         "#h": [channel_id],
         "limit": limit
     });
@@ -325,7 +325,7 @@ pub async fn cmd_get_thread(
     // 1. Replies referencing this event via e-tag (no kind restriction)
     // 2. The root event itself by ID
     let mut reply_filter = serde_json::json!({
-        "kinds": [9, 40002, 40003, 40008, 45003],
+        "kinds": [9, 40002, 40003, 40008, 40009, 45003],
         "#h": [channel_id],
         "#e": [event_id],
         "limit": limit
@@ -353,7 +353,7 @@ pub async fn cmd_search(
 ) -> Result<(), CliError> {
     let limit = limit.unwrap_or(20).min(100);
     let filter = serde_json::json!({
-        "kinds": [9, 40002, 45001, 45003],
+        "kinds": [9, 40002, 40009, 45001, 45003],
         "search": query,
         "limit": limit
     });

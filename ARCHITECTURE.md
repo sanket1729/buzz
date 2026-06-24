@@ -126,13 +126,14 @@ The `kind` integer is the only dispatch switch. The relay routes, stores, and fa
 | 9 | KIND_STREAM_MESSAGE | Chat message in a Stream channel (NIP-29 group chat) |
 | 40002 | KIND_STREAM_MESSAGE_V2 | Stream message v2 format |
 | 40003 | KIND_STREAM_MESSAGE_EDIT | Edit of a stream message |
+| 40009 | KIND_STREAM_MESSAGE_ANON | Anonymous ring-signed stream message |
 | 43001 | KIND_JOB_REQUEST | Agent job request |
 | 45001 | KIND_FORUM_POST | Forum thread root |
 | 45003 | KIND_FORUM_COMMENT | Forum thread reply |
 | 46001–46012 | KIND_WORKFLOW_* | Workflow execution events |
 | 20001 | KIND_PRESENCE_UPDATE | Ephemeral presence heartbeat |
 
-`buzz-core` defines all 81 kinds as `pub const KIND_*: u32` and exports `ALL_KINDS: &[u32]`. Kinds are `u32` (NIP-01 specifies unsigned integer; `u32` covers the full range). Buzz uses both standard Nostr kinds (e.g., kind 7 for reactions) and custom ranges (40000+).
+`buzz-core` defines registered kinds as `pub const KIND_*: u32` and exports `ALL_KINDS: &[u32]`. Kinds are `u32` (NIP-01 specifies unsigned integer; `u32` covers the full range). Buzz uses both standard Nostr kinds (e.g., kind 7 for reactions) and custom ranges (40000+).
 
 Note: `KIND_AUTH` (22242) is `pub const KIND_AUTH: u32` in `buzz-core/src/kind.rs` and imported by `buzz-relay/src/handlers/event.rs`. `KIND_CANVAS` (40100) is likewise `pub const KIND_CANVAS: u32` in `buzz-core/src/kind.rs`.
 

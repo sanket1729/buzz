@@ -33,7 +33,7 @@ final forumThreadProvider =
         // Root event lookup by id.
         session.fetchHistory(
           NostrFilter(
-            kinds: const [9, 40002, 45001, 45003],
+            kinds: const [9, 40002, 40009, 45001, 45003],
             ids: [args.eventId],
             limit: 1,
           ),

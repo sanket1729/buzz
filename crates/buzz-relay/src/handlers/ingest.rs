@@ -27,11 +27,12 @@ use buzz_core::kind::{
     KIND_NIP29_EDIT_METADATA, KIND_NIP29_JOIN_REQUEST, KIND_NIP29_LEAVE_REQUEST,
     KIND_NIP29_PUT_USER, KIND_NIP29_REMOVE_USER, KIND_NIP43_LEAVE_REQUEST,
     KIND_NIP65_RELAY_LIST_METADATA, KIND_PIN_LIST, KIND_PRESENCE_UPDATE, KIND_PROFILE,
-    KIND_REACTION, KIND_READ_STATE, KIND_STREAM_MESSAGE, KIND_STREAM_MESSAGE_BOOKMARKED,
-    KIND_STREAM_MESSAGE_DIFF, KIND_STREAM_MESSAGE_EDIT, KIND_STREAM_MESSAGE_PINNED,
-    KIND_STREAM_MESSAGE_SCHEDULED, KIND_STREAM_MESSAGE_V2, KIND_STREAM_REMINDER, KIND_TEXT_NOTE,
-    KIND_USER_STATUS, KIND_WORKFLOW_DEF, KIND_WORKFLOW_TRIGGER, RELAY_ADMIN_ADD_MEMBER,
-    RELAY_ADMIN_CHANGE_ROLE, RELAY_ADMIN_REMOVE_MEMBER,
+    KIND_REACTION, KIND_READ_STATE, KIND_STREAM_MESSAGE, KIND_STREAM_MESSAGE_ANON,
+    KIND_STREAM_MESSAGE_BOOKMARKED, KIND_STREAM_MESSAGE_DIFF, KIND_STREAM_MESSAGE_EDIT,
+    KIND_STREAM_MESSAGE_PINNED, KIND_STREAM_MESSAGE_SCHEDULED, KIND_STREAM_MESSAGE_V2,
+    KIND_STREAM_REMINDER, KIND_TEXT_NOTE, KIND_USER_STATUS, KIND_WORKFLOW_DEF,
+    KIND_WORKFLOW_TRIGGER, RELAY_ADMIN_ADD_MEMBER, RELAY_ADMIN_CHANGE_ROLE,
+    RELAY_ADMIN_REMOVE_MEMBER,
 };
 use buzz_core::verification::verify_event;
 use nostr::Event;
@@ -181,6 +182,7 @@ fn required_scope_for_kind(kind: u32, event: &Event) -> Result<Scope, &'static s
         | KIND_STREAM_MESSAGE_SCHEDULED
         | KIND_STREAM_REMINDER
         | KIND_STREAM_MESSAGE_DIFF
+        | KIND_STREAM_MESSAGE_ANON
         | KIND_FORUM_POST
         | KIND_FORUM_VOTE
         | KIND_FORUM_COMMENT => Ok(Scope::MessagesWrite),
@@ -385,6 +387,7 @@ pub(crate) fn requires_h_channel_scope(kind: u32) -> bool {
             | KIND_STREAM_MESSAGE_SCHEDULED
             | KIND_STREAM_REMINDER
             | KIND_STREAM_MESSAGE_DIFF
+            | KIND_STREAM_MESSAGE_ANON
             | KIND_CANVAS
             | KIND_FORUM_POST
             | KIND_FORUM_VOTE
@@ -430,6 +433,167 @@ pub(crate) async fn check_channel_membership(
     } else {
         Err("restricted: not a channel member".to_string())
     }
+}
+
+fn single_anonymous_ring_sig_artifact(event: &Event) -> Result<&str, String> {
+    let ring_sig_tags: Vec<_> = event
+        .tags
+        .iter()
+        .filter(|tag| {
+            tag.as_slice().first().map(String::as_str) == Some(buzz_ring_sig_pkg::RING_SIG_TAG)
+        })
+        .collect();
+
+    if ring_sig_tags.len() != 1 {
+        return Err(format!(
+            "invalid: kind:40009 requires exactly one {} tag",
+            buzz_ring_sig_pkg::RING_SIG_TAG
+        ));
+    }
+
+    let parts = ring_sig_tags[0].as_slice();
+    match (parts.get(1), parts.get(2)) {
+        (Some(artifact_hex), Some(marker))
+            if !artifact_hex.is_empty() && marker == buzz_ring_sig_pkg::SCHEME_ID =>
+        {
+            Ok(artifact_hex.as_str())
+        }
+        _ => Err(format!(
+            "invalid: kind:40009 {} tag must include artifact and {} marker",
+            buzz_ring_sig_pkg::RING_SIG_TAG,
+            buzz_ring_sig_pkg::SCHEME_ID
+        )),
+    }
+}
+
+fn bound_anonymous_channel_id(event: &Event) -> Result<Uuid, String> {
+    let h_tags: Vec<_> = event
+        .tags
+        .iter()
+        .filter(|tag| tag.kind().to_string() == "h")
+        .collect();
+    if h_tags.len() != 1 {
+        return Err("invalid: kind:40009 requires exactly one channel h tag".to_string());
+    }
+
+    let channel_id = h_tags[0]
+        .content()
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "invalid: kind:40009 malformed channel h tag".to_string())?;
+
+    Uuid::parse_str(channel_id)
+        .map_err(|error| format!("invalid: kind:40009 malformed channel h tag: {error}"))
+}
+
+fn anonymous_unsigned_body_from_event(event: &Event) -> buzz_ring_sig_pkg::UnsignedEventBody {
+    buzz_ring_sig_pkg::UnsignedEventBody {
+        created_at: event.created_at.as_secs(),
+        kind: event.kind.as_u16() as u64,
+        tags: event
+            .tags
+            .iter()
+            .map(|tag| tag.as_slice().to_vec())
+            .collect(),
+        content: event.content.clone(),
+    }
+}
+
+fn anonymous_ring_is_canonical_sorted(ring: &[[u8; 32]]) -> bool {
+    ring.windows(2).all(|window| window[0] < window[1])
+}
+
+fn verify_anonymous_event_with_members(
+    event: &Event,
+    channel_id: Uuid,
+    current_member_pubkeys: &[String],
+    auth_pubkey: &nostr::PublicKey,
+) -> Result<(), String> {
+    let event_channel_id = bound_anonymous_channel_id(event)?;
+    if event_channel_id != channel_id {
+        return Err("invalid: kind:40009 h tag does not match resolved channel".to_string());
+    }
+
+    let outer_pubkey = event.pubkey.to_hex().to_ascii_lowercase();
+    if current_member_pubkeys
+        .iter()
+        .any(|member| member == &outer_pubkey)
+    {
+        return Err(
+            "restricted: kind:40009 outer pubkey must be ephemeral, not a current channel member"
+                .to_string(),
+        );
+    }
+
+    let auth_pubkey = auth_pubkey.to_hex().to_ascii_lowercase();
+    if current_member_pubkeys
+        .iter()
+        .any(|member| member == &auth_pubkey)
+    {
+        return Err(
+            "restricted: kind:40009 auth principal must be ephemeral, not a current channel member"
+                .to_string(),
+        );
+    }
+
+    let artifact_hex = single_anonymous_ring_sig_artifact(event)?;
+    let artifact = buzz_ring_sig_pkg::SagArtifact::from_hex(artifact_hex)
+        .map_err(|error| format!("invalid: anonymous ring signature artifact: {error}"))?;
+    if !anonymous_ring_is_canonical_sorted(artifact.ring()) {
+        return Err("invalid: anonymous signature ring must be canonical sorted".to_string());
+    }
+    let body = anonymous_unsigned_body_from_event(event);
+    let result = buzz_ring_sig_pkg::verify_artifact(
+        &channel_id.to_string(),
+        &body,
+        &artifact,
+        buzz_ring_sig_pkg::MembershipCheck::CurrentMembersOnly(current_member_pubkeys),
+    )
+    .map_err(|error| format!("invalid: anonymous signature verification failed: {error}"))?;
+
+    if result.anonymity_set_state == buzz_ring_sig_pkg::AnonymitySetState::NonMember {
+        return Err(
+            "restricted: anonymous signature ring must contain only current channel members"
+                .to_string(),
+        );
+    }
+
+    Ok(())
+}
+
+/// Authorize a kind:40009 channel write by its embedded ring signature.
+///
+/// The outer Nostr pubkey is only a transport key for anonymous sends; it must
+/// not be required to be a channel member because doing so deanonymizes the real
+/// signer on the wire.
+pub(crate) async fn authorize_anonymous_channel_message(
+    state: &AppState,
+    event: &Event,
+    channel_id: Uuid,
+    auth_pubkey: &nostr::PublicKey,
+) -> Result<(), String> {
+    let current_member_pubkeys: Vec<String> = state
+        .db
+        .get_members(channel_id)
+        .await
+        .map_err(|error| format!("error: database error: {error}"))?
+        .into_iter()
+        .map(|member| hex::encode(member.pubkey))
+        .collect();
+
+    let auth_pubkey_hex = auth_pubkey.to_hex().to_ascii_lowercase();
+    if state
+        .db
+        .is_relay_member(&auth_pubkey_hex)
+        .await
+        .map_err(|error| format!("error: database error: {error}"))?
+    {
+        return Err(
+            "restricted: kind:40009 auth principal must be ephemeral, not a relay member"
+                .to_string(),
+        );
+    }
+
+    verify_anonymous_event_with_members(event, channel_id, &current_member_pubkeys, auth_pubkey)
 }
 
 // ── Token channel access ─────────────────────────────────────────────────────
@@ -1288,7 +1452,11 @@ pub async fn ingest_event(
         let skip_membership = kind_u32 == KIND_NIP29_JOIN_REQUEST
             || kind_u32 == KIND_NIP29_CREATE_GROUP
             || auth.has_proxy_scope();
-        if !skip_membership {
+        if kind_u32 == KIND_STREAM_MESSAGE_ANON {
+            authorize_anonymous_channel_message(state, &event, ch_id, auth.pubkey())
+                .await
+                .map_err(IngestError::Rejected)?;
+        } else if !skip_membership {
             check_channel_membership(state, ch_id, &pubkey_bytes)
                 .await
                 .map_err(IngestError::Rejected)?;
@@ -1867,7 +2035,8 @@ mod tests {
     use super::*;
     use buzz_core::kind::{
         KIND_CANVAS, KIND_FORUM_COMMENT, KIND_FORUM_POST, KIND_FORUM_VOTE, KIND_LONG_FORM,
-        KIND_PRESENCE_UPDATE, KIND_STREAM_MESSAGE, KIND_STREAM_MESSAGE_DIFF, KIND_USER_STATUS,
+        KIND_PRESENCE_UPDATE, KIND_STREAM_MESSAGE, KIND_STREAM_MESSAGE_ANON,
+        KIND_STREAM_MESSAGE_DIFF, KIND_USER_STATUS,
     };
 
     #[test]
@@ -1887,6 +2056,7 @@ mod tests {
     fn channel_scoped_content_kinds_require_h_tags() {
         for kind in [
             KIND_STREAM_MESSAGE,
+            KIND_STREAM_MESSAGE_ANON,
             KIND_STREAM_MESSAGE_DIFF,
             KIND_CANVAS,
             KIND_FORUM_POST,
@@ -2219,6 +2389,195 @@ mod tests {
             .tags(nostr_tags)
             .sign_with_keys(&keys)
             .unwrap()
+    }
+
+    fn test_secret(byte: u8) -> [u8; 32] {
+        let mut secret = [0u8; 32];
+        secret[31] = byte;
+        secret
+    }
+
+    fn test_keys(byte: u8) -> nostr::Keys {
+        nostr::Keys::new(nostr::SecretKey::from_slice(&test_secret(byte)).unwrap())
+    }
+
+    fn signed_anonymous_event(
+        channel_id: Uuid,
+        signer_keys: &nostr::Keys,
+        outer_keys: &nostr::Keys,
+        ring_pubkeys: &[String],
+    ) -> Event {
+        let content = "anonymous hello";
+        let created_at = 1_782_250_000u64;
+        let channel = channel_id.to_string();
+        let body = buzz_ring_sig_pkg::UnsignedEventBody {
+            created_at,
+            kind: KIND_STREAM_MESSAGE_ANON as u64,
+            tags: vec![vec!["h".to_string(), channel.clone()]],
+            content: content.to_string(),
+        };
+        let signer_pubkey = signer_keys.public_key().to_hex().to_ascii_lowercase();
+        let signer_index = ring_pubkeys
+            .iter()
+            .position(|pubkey| pubkey == &signer_pubkey)
+            .expect("signer should be in ring");
+        let secret_key32: [u8; 32] = signer_keys
+            .secret_key()
+            .as_secret_bytes()
+            .try_into()
+            .expect("test key is 32 bytes");
+        let artifact = buzz_ring_sig_pkg::sign_with_aux(
+            &channel,
+            &body,
+            ring_pubkeys,
+            signer_index,
+            secret_key32,
+            [7u8; 32],
+        )
+        .expect("anonymous signature should sign");
+        let h_tag = nostr::Tag::parse(["h", channel.as_str()]).unwrap();
+        let ring_sig_tag = nostr::Tag::parse([
+            buzz_ring_sig_pkg::RING_SIG_TAG,
+            artifact.to_hex().as_str(),
+            buzz_ring_sig_pkg::SCHEME_ID,
+        ])
+        .unwrap();
+
+        nostr::EventBuilder::new(
+            nostr::Kind::Custom(KIND_STREAM_MESSAGE_ANON as u16),
+            content,
+        )
+        .tags([h_tag, ring_sig_tag])
+        .custom_created_at(nostr::Timestamp::from(created_at))
+        .sign_with_keys(outer_keys)
+        .unwrap()
+    }
+
+    #[test]
+    fn anonymous_authorization_accepts_ephemeral_outer_pubkey() {
+        let channel_id = Uuid::parse_str("2114f4bc-5130-4816-83da-acbfcc65243b").unwrap();
+        let signer_keys = test_keys(1);
+        let other_member_keys = test_keys(2);
+        let outer_keys = test_keys(3);
+        let current_members = vec![
+            signer_keys.public_key().to_hex().to_ascii_lowercase(),
+            other_member_keys.public_key().to_hex().to_ascii_lowercase(),
+        ];
+        let event = signed_anonymous_event(channel_id, &signer_keys, &outer_keys, &current_members);
+
+        assert_ne!(
+            event.pubkey,
+            signer_keys.public_key(),
+            "outer event pubkey must not be the ring signer"
+        );
+        assert!(verify_anonymous_event_with_members(
+            &event,
+            channel_id,
+            &current_members,
+            &outer_keys.public_key()
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn anonymous_authorization_rejects_non_member_ring_key() {
+        let channel_id = Uuid::parse_str("2114f4bc-5130-4816-83da-acbfcc65243b").unwrap();
+        let signer_keys = test_keys(1);
+        let non_member_keys = test_keys(2);
+        let outer_keys = test_keys(3);
+        let ring_pubkeys = vec![
+            signer_keys.public_key().to_hex().to_ascii_lowercase(),
+            non_member_keys.public_key().to_hex().to_ascii_lowercase(),
+        ];
+        let current_members = vec![signer_keys.public_key().to_hex().to_ascii_lowercase()];
+        let event = signed_anonymous_event(channel_id, &signer_keys, &outer_keys, &ring_pubkeys);
+
+        let err = verify_anonymous_event_with_members(
+            &event,
+            channel_id,
+            &current_members,
+            &outer_keys.public_key(),
+        )
+        .expect_err("ring with non-member key must be rejected");
+        assert!(
+            err.contains("current channel members"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn anonymous_authorization_rejects_unsorted_ring() {
+        let channel_id = Uuid::parse_str("2114f4bc-5130-4816-83da-acbfcc65243b").unwrap();
+        let signer_keys = test_keys(1);
+        let other_member_keys = test_keys(2);
+        let outer_keys = test_keys(3);
+        let mut ring_pubkeys = vec![
+            signer_keys.public_key().to_hex().to_ascii_lowercase(),
+            other_member_keys.public_key().to_hex().to_ascii_lowercase(),
+        ];
+        ring_pubkeys.sort();
+        ring_pubkeys.reverse();
+        let current_members = ring_pubkeys.clone();
+        let event = signed_anonymous_event(channel_id, &signer_keys, &outer_keys, &ring_pubkeys);
+
+        let err = verify_anonymous_event_with_members(
+            &event,
+            channel_id,
+            &current_members,
+            &outer_keys.public_key(),
+        )
+        .expect_err("unsorted ring must be rejected");
+        assert!(err.contains("canonical sorted"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn anonymous_authorization_rejects_current_member_outer_pubkey() {
+        let channel_id = Uuid::parse_str("2114f4bc-5130-4816-83da-acbfcc65243b").unwrap();
+        let signer_keys = test_keys(1);
+        let other_member_keys = test_keys(2);
+        let current_members = vec![
+            signer_keys.public_key().to_hex().to_ascii_lowercase(),
+            other_member_keys.public_key().to_hex().to_ascii_lowercase(),
+        ];
+        let event =
+            signed_anonymous_event(channel_id, &signer_keys, &signer_keys, &current_members);
+
+        let err = verify_anonymous_event_with_members(
+            &event,
+            channel_id,
+            &current_members,
+            &signer_keys.public_key(),
+        )
+        .expect_err("current-member outer pubkey must be rejected");
+        assert!(
+            err.contains("outer pubkey must be ephemeral"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn anonymous_authorization_rejects_current_member_auth_principal() {
+        let channel_id = Uuid::parse_str("2114f4bc-5130-4816-83da-acbfcc65243b").unwrap();
+        let signer_keys = test_keys(1);
+        let other_member_keys = test_keys(2);
+        let outer_keys = test_keys(3);
+        let current_members = vec![
+            signer_keys.public_key().to_hex().to_ascii_lowercase(),
+            other_member_keys.public_key().to_hex().to_ascii_lowercase(),
+        ];
+        let event = signed_anonymous_event(channel_id, &signer_keys, &outer_keys, &current_members);
+
+        let err = verify_anonymous_event_with_members(
+            &event,
+            channel_id,
+            &current_members,
+            &signer_keys.public_key(),
+        )
+        .expect_err("current-member auth principal must be rejected");
+        assert!(
+            err.contains("auth principal must be ephemeral"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]

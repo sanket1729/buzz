@@ -9,8 +9,10 @@
 //! Each function validates inputs and returns a nostr::EventBuilder.
 //! Signing and submission happen in relay::submit_event.
 
-use buzz_core_pkg::kind::{KIND_IA_ARCHIVE_REQUEST, KIND_IA_UNARCHIVE_REQUEST};
-use nostr::{EventBuilder, EventId, Kind, Tag};
+use buzz_core_pkg::kind::{
+    KIND_IA_ARCHIVE_REQUEST, KIND_IA_UNARCHIVE_REQUEST, KIND_STREAM_MESSAGE_ANON,
+};
+use nostr::{EventBuilder, EventId, Kind, Tag, Timestamp};
 use uuid::Uuid;
 
 // ── Constants ────────────────────────────────────────────────────────────────
@@ -28,6 +30,10 @@ const MAX_EMOJI_CHARS: usize = 64;
 
 fn tag(parts: Vec<&str>) -> Result<Tag, String> {
     Tag::parse(parts).map_err(|e| format!("invalid tag: {e}"))
+}
+
+fn tag_values(tags: &[Tag]) -> Vec<Vec<String>> {
+    tags.iter().map(|tag| tag.as_slice().to_vec()).collect()
 }
 
 fn check_content(content: &str) -> Result<(), String> {
@@ -305,6 +311,95 @@ pub fn build_message(
         custom_emoji_tags,
         mention_ref_tags,
         &[],
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn anonymous_message_base_tags(
+    channel_id: Uuid,
+    thread_ref: Option<&ThreadRef>,
+    mentions: &[&str],
+    media_tags: &[Vec<String>],
+    custom_emoji_tags: &[Vec<String>],
+    mention_ref_tags: &[Vec<String>],
+) -> Result<Vec<Tag>, String> {
+    let mut tags = vec![tag(vec!["h", &channel_id.to_string()])?];
+    if let Some(tr) = thread_ref {
+        tags.extend(thread_tags(tr)?);
+    }
+    tags.extend(mention_tags(mentions)?);
+    imeta_tags(media_tags, &mut tags)?;
+    emoji_tags(custom_emoji_tags, &mut tags)?;
+    mention_reference_tags(mention_ref_tags, &mut tags)?;
+    Ok(tags)
+}
+
+/// Unsigned body for kind 40009 anonymous stream messages.
+///
+/// The caller signs this body with `buzz-ring-sig`, then calls
+/// [`build_anonymous_message`] to append the canonical `ring_sig` tag and emit
+/// a Nostr event using the exact same `created_at`, kind, tags, and content.
+#[allow(clippy::too_many_arguments)]
+pub fn build_anonymous_message_unsigned_body(
+    channel_id: Uuid,
+    content: &str,
+    created_at: u64,
+    thread_ref: Option<&ThreadRef>,
+    mentions: &[&str],
+    media_tags: &[Vec<String>],
+    custom_emoji_tags: &[Vec<String>],
+    mention_ref_tags: &[Vec<String>],
+) -> Result<buzz_ring_sig_pkg::UnsignedEventBody, String> {
+    check_content(content)?;
+    let tags = anonymous_message_base_tags(
+        channel_id,
+        thread_ref,
+        mentions,
+        media_tags,
+        custom_emoji_tags,
+        mention_ref_tags,
+    )?;
+    Ok(buzz_ring_sig_pkg::UnsignedEventBody {
+        created_at,
+        kind: KIND_STREAM_MESSAGE_ANON as u64,
+        tags: tag_values(&tags),
+        content: content.to_string(),
+    })
+}
+
+/// Kind 40009 — anonymous ring-signed stream message.
+#[allow(clippy::too_many_arguments)]
+pub fn build_anonymous_message(
+    channel_id: Uuid,
+    content: &str,
+    created_at: u64,
+    thread_ref: Option<&ThreadRef>,
+    mentions: &[&str],
+    media_tags: &[Vec<String>],
+    custom_emoji_tags: &[Vec<String>],
+    mention_ref_tags: &[Vec<String>],
+    artifact_hex: &str,
+) -> Result<EventBuilder, String> {
+    check_content(content)?;
+    buzz_ring_sig_pkg::SagArtifact::from_hex(artifact_hex)
+        .map_err(|error| format!("invalid ring signature artifact: {error}"))?;
+    let mut tags = anonymous_message_base_tags(
+        channel_id,
+        thread_ref,
+        mentions,
+        media_tags,
+        custom_emoji_tags,
+        mention_ref_tags,
+    )?;
+    tags.push(tag(vec![
+        buzz_ring_sig_pkg::RING_SIG_TAG,
+        artifact_hex,
+        buzz_ring_sig_pkg::SCHEME_ID,
+    ])?);
+    Ok(
+        EventBuilder::new(Kind::Custom(KIND_STREAM_MESSAGE_ANON as u16), content)
+            .tags(tags)
+            .custom_created_at(Timestamp::from(created_at)),
     )
 }
 

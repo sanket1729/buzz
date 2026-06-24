@@ -181,12 +181,49 @@ pub async fn submit_event(
     check_nip98_replay(&state, event_id_bytes)?;
     let pubkey_bytes = pubkey.to_bytes().to_vec();
 
-    // Enforce relay membership (with NIP-OA fallback via x-auth-tag header).
-    let auth_tag = headers.get("x-auth-tag").and_then(|v| v.to_str().ok());
-    super::relay_members::enforce_relay_membership(&state, &pubkey_bytes, auth_tag).await?;
-
     let event: nostr::Event = serde_json::from_slice(&body)
         .map_err(|e| api_error(StatusCode::BAD_REQUEST, &format!("invalid event JSON: {e}")))?;
+    let kind_u32 = buzz_core::kind::event_kind_u32(&event);
+
+    let auth_tag = headers.get("x-auth-tag").and_then(|v| v.to_str().ok());
+    if kind_u32 == buzz_core::kind::KIND_STREAM_MESSAGE_ANON {
+        if auth_tag.is_some() {
+            return Err(api_error(
+                StatusCode::BAD_REQUEST,
+                "invalid: kind:40009 must not use x-auth-tag delegation",
+            ));
+        }
+        let channel_id = crate::handlers::ingest::extract_channel_id(&event).ok_or_else(|| {
+            api_error(
+                StatusCode::BAD_REQUEST,
+                "invalid: kind:40009 requires a channel h tag",
+            )
+        })?;
+        crate::handlers::ingest::authorize_anonymous_channel_message(
+            &state, &event, channel_id, &pubkey,
+        )
+        .await
+        .map_err(|error| api_error(StatusCode::BAD_REQUEST, &error))?;
+    } else {
+        // Enforce relay membership (with NIP-OA fallback via x-auth-tag header).
+        match super::relay_members::check_relay_membership(&state, &pubkey_bytes, auth_tag).await {
+            Ok(
+                super::relay_members::MembershipDecision::OpenRelay
+                | super::relay_members::MembershipDecision::Member
+                | super::relay_members::MembershipDecision::ViaOwner(_),
+            ) => {}
+            Ok(super::relay_members::MembershipDecision::Denied) => {
+                return Err((
+                    StatusCode::FORBIDDEN,
+                    Json(serde_json::json!({
+                        "error": "relay_membership_required",
+                        "message": "You must be a relay member to access this relay"
+                    })),
+                ));
+            }
+            Err(error) => return Err(internal_error(&error)),
+        }
+    }
 
     // Mesh signaling kinds (24620 status report, 24621 connect request) are
     // ephemeral and deliberately absent from ingest_event's per-kind allowlist.
@@ -194,7 +231,6 @@ pub async fn submit_event(
     // them to the mesh handlers — the HTTP twin of the WS door's special-casing
     // in handlers::event. Membership was enforced above; the handlers re-check
     // it fail-closed.
-    let kind_u32 = buzz_core::kind::event_kind_u32(&event);
     if kind_u32 == buzz_core::kind::KIND_MESH_STATUS_REPORT
         || kind_u32 == buzz_core::kind::KIND_MESH_CONNECT_REQUEST
     {

@@ -31,7 +31,7 @@ class ActivityNotifier extends AsyncNotifier<HomeFeedResponse> {
       // Mentions of me on user-visible channel content.
       session.fetchHistory(
         NostrFilter(
-          kinds: const [9, 40002, 1, 45001, 45003],
+          kinds: const [9, 40002, 40009, 1, 45001, 45003],
           tags: {
             '#p': [myPk],
           },

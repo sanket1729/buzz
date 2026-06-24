@@ -50,6 +50,7 @@ tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
 infer = "0.19"
 hex = "0.4"
+rand = "0.10"
 tokio = { version = "1", features = ["fs", "sync", "rt", "macros", "time"] }
 tokio-tungstenite = { version = "0.29", features = ["rustls-tls-webpki-roots"] }
 tokio-util = { version = "0.7", features = ["rt"] }
@@ -66,6 +67,7 @@ reqwest = { version = "0.13", features = ["json", "query", "stream"] }
 url = "2"
 buzz_core_pkg = { package = "buzz-core", path = "../../crates/buzz-core" }
 buzz_persona_pkg = { package = "buzz-persona", path = "../../crates/buzz-persona" }
+buzz_ring_sig_pkg = { package = "buzz-ring-sig", path = "../../crates/buzz-ring-sig" }
 buzz_sdk_pkg = { package = "buzz-sdk", path = "../../crates/buzz-sdk" }
 mesh-llm-sdk = { git = "https://github.com/Mesh-LLM/mesh-llm.git", rev = "ebc3ab4c4b5f4a45d5bc942c66c18583800c3f82", package = "mesh-llm-sdk", default-features = false, features = ["client", "serving"], optional = true }
 mesh-llm-host-runtime = { git = "https://github.com/Mesh-LLM/mesh-llm.git", rev = "ebc3ab4c4b5f4a45d5bc942c66c18583800c3f82", package = "mesh-llm-host-runtime", default-features = false, features = ["dynamic-native-runtime"], optional = true }

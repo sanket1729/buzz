@@ -2919,6 +2919,7 @@ async fn wait_for_any_ok(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use buzz_core::kind::{KIND_STREAM_MESSAGE, KIND_STREAM_MESSAGE_ANON};
 
     // ── relay_ws_to_http ──────────────────────────────────────────────────────
 
@@ -3539,7 +3540,7 @@ mod tests {
         let channel_id = Uuid::new_v4();
         let membership_ts = 10_000;
         let filter = ChannelFilter {
-            kinds: Some(vec![9]),
+            kinds: Some(vec![KIND_STREAM_MESSAGE, KIND_STREAM_MESSAGE_ANON]),
             require_mention: true,
         };
 
@@ -3634,7 +3635,7 @@ mod tests {
             RelayCommand::Subscribe {
                 channel_id,
                 filter: ChannelFilter {
-                    kinds: Some(vec![9]),
+                    kinds: Some(vec![KIND_STREAM_MESSAGE, KIND_STREAM_MESSAGE_ANON]),
                     require_mention: false,
                 },
                 replay_since: Some(1_000),

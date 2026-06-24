@@ -166,7 +166,7 @@ pub async fn get_channels(state: State<'_, AppState>) -> Result<Vec<ChannelInfo>
             .iter()
             .map(|id| {
                 serde_json::json!({
-                    "kinds": [9, 40002],
+                    "kinds": [9, 40002, 40009],
                     "#h": [id],
                     "limit": 1
                 })

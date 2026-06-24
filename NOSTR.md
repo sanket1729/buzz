@@ -68,6 +68,7 @@ PGPASSWORD=buzz_dev psql -h localhost -U buzz -d buzz -c \
 | **Join request (kind:9021)** | ✅ | Open channels only. Adds member, emits system message + group discovery events + kind:44100 membership notification. Private channels rejected at ingest. |
 | **Edits (kind:40003)** | ⚠️ | Works on the wire but Buzz-only — no standard NIP-29 client renders these |
 | **Rich content (kind:40002)** | ⚠️ | Works on the wire but Buzz-only — no standard NIP-29 client renders these |
+| **Anonymous ring-signed messages (kind:40009)** | ⚠️ | Buzz-only direct NIP-29 extension; clients must verify `ring_sig` before rendering anonymous authorship |
 
 ### What Doesn't Work
 

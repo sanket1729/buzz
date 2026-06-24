@@ -21,6 +21,7 @@ abstract final class EventKind {
   static const streamMessageV2 = 40002;
   static const streamMessageEdit = 40003;
   static const streamMessageDiff = 40008;
+  static const streamMessageAnon = 40009;
   static const systemMessage = 40099;
   static const forumPost = 45001;
   static const forumComment = 45003;
@@ -29,6 +30,7 @@ abstract final class EventKind {
   static const channelMessageEventKinds = [
     streamMessage, // 9
     streamMessageV2, // 40002
+    streamMessageAnon, // 40009
     forumPost, // 45001
     forumComment, // 45003
   ];

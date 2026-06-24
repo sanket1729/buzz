@@ -1,4 +1,5 @@
-use nostr::{Event, EventId, Keys, PublicKey};
+use nostr::{Event, EventId, JsonUtil, Keys, PublicKey};
+use serde::Serialize;
 use tauri::{AppHandle, State};
 
 use crate::{
@@ -43,7 +44,7 @@ pub async fn get_feed(
 
     // Mentions: messages that reference me via #p.
     let mut mention_filter = serde_json::json!({
-        "kinds": [9, 40002, 1, 45001, 45003],
+        "kinds": [9, 40002, 40009, 1, 45001, 45003],
         "#p": [my_pubkey],
         "limit": cap,
     });
@@ -111,7 +112,7 @@ pub async fn search_messages(
     let mut filter = serde_json::Map::new();
     filter.insert(
         "kinds".to_string(),
-        serde_json::json!([9, 40002, 45001, 45003]),
+        serde_json::json!([9, 40002, 40009, 45001, 45003]),
     );
     filter.insert("search".to_string(), serde_json::json!(q.trim()));
     filter.insert("limit".to_string(), serde_json::json!(cap));
@@ -166,7 +167,7 @@ pub async fn get_forum_thread(
     let events = query_relay(
         &state,
         &[
-            serde_json::json!({ "ids": [event_id.clone()], "kinds": [9, 40002, 45001, 45003] }),
+            serde_json::json!({ "ids": [event_id.clone()], "kinds": [9, 40002, 40009, 45001, 45003] }),
             serde_json::json!({
                 "kinds": [9, 45003],
                 "#e": [event_id.clone()],
@@ -202,7 +203,7 @@ pub async fn get_event(event_id: String, state: State<'_, AppState>) -> Result<S
         &state,
         &[serde_json::json!({
             "ids": [event_id],
-            "kinds": [0, 1, 3, 5, 7, 9, 30078, 40002, 40003, 40008, 40099, 40100, 45001, 45003],
+            "kinds": [0, 1, 3, 5, 7, 9, 30078, 40002, 40003, 40008, 40009, 40099, 40100, 45001, 45003],
             "limit": 1
         })],
     )
@@ -228,7 +229,7 @@ async fn resolve_thread_ref(
         state,
         &[serde_json::json!({
             "ids": [parent_event_id],
-            "kinds": [9, 40002, 45001, 45003],
+            "kinds": [9, 40002, 40009, 45001, 45003],
             "limit": 1
         })],
     )
@@ -265,6 +266,293 @@ async fn resolve_thread_ref(
     })
 }
 
+fn single_ring_sig_artifact(ev: &Event) -> Result<&str, String> {
+    let ring_sig_tags: Vec<_> = ev
+        .tags
+        .iter()
+        .filter(|tag| {
+            tag.as_slice().first().map(String::as_str) == Some(buzz_ring_sig_pkg::RING_SIG_TAG)
+        })
+        .collect();
+
+    if ring_sig_tags.len() != 1 {
+        return Err(format!(
+            "kind:40009 requires exactly one {} tag",
+            buzz_ring_sig_pkg::RING_SIG_TAG
+        ));
+    }
+
+    let parts = ring_sig_tags[0].as_slice();
+    match (parts.get(1), parts.get(2).map(String::as_str)) {
+        (Some(artifact_hex), Some(buzz_ring_sig_pkg::SCHEME_ID)) if !artifact_hex.is_empty() => {
+            Ok(artifact_hex)
+        }
+        _ => Err(format!(
+            "kind:40009 {} tag must use marker {}",
+            buzz_ring_sig_pkg::RING_SIG_TAG,
+            buzz_ring_sig_pkg::SCHEME_ID
+        )),
+    }
+}
+
+fn canonical_channel_id(value: &str) -> Result<String, String> {
+    uuid::Uuid::parse_str(value)
+        .map(|uuid| uuid.to_string())
+        .map_err(|error| format!("invalid channel UUID: {error}"))
+}
+
+fn single_channel_h_tag(ev: &Event) -> Result<&str, String> {
+    let h_tags: Vec<_> = ev
+        .tags
+        .iter()
+        .filter(|tag| tag.as_slice().first().map(String::as_str) == Some("h"))
+        .collect();
+
+    if h_tags.len() != 1 {
+        return Err("kind:40009 requires exactly one channel h tag".to_string());
+    }
+
+    h_tags[0]
+        .as_slice()
+        .get(1)
+        .map(String::as_str)
+        .filter(|channel_id| !channel_id.is_empty())
+        .ok_or_else(|| "kind:40009 malformed channel h tag".to_string())
+}
+
+fn bound_anonymous_channel_id(
+    ev: &Event,
+    supplied_channel_id: Option<&str>,
+) -> Result<String, String> {
+    let raw_event_channel_id = single_channel_h_tag(ev)?;
+    let event_channel_id = canonical_channel_id(&raw_event_channel_id)
+        .map_err(|error| format!("kind:40009 malformed channel h tag: {error}"))?;
+
+    if let Some(supplied_channel_id) = supplied_channel_id {
+        let supplied_channel_id = canonical_channel_id(supplied_channel_id)
+            .map_err(|error| format!("supplied channelId is malformed: {error}"))?;
+        if supplied_channel_id != event_channel_id {
+            return Err("supplied channelId does not match event h tag".to_string());
+        }
+    }
+
+    Ok(event_channel_id)
+}
+
+fn unsigned_body_from_event(ev: &Event) -> buzz_ring_sig_pkg::UnsignedEventBody {
+    buzz_ring_sig_pkg::UnsignedEventBody {
+        created_at: ev.created_at.as_secs(),
+        kind: ev.kind.as_u16() as u64,
+        tags: tags_to_vec(ev),
+        content: ev.content.clone(),
+    }
+}
+
+fn anonymity_set_state_name(state: buzz_ring_sig_pkg::AnonymitySetState) -> &'static str {
+    match state {
+        buzz_ring_sig_pkg::AnonymitySetState::MemberVerified => "member_verified",
+        buzz_ring_sig_pkg::AnonymitySetState::UncheckedOrStale => "unchecked_or_stale",
+        buzz_ring_sig_pkg::AnonymitySetState::NonMember => "non_member",
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AnonymousVerificationInfo {
+    pub crypto_valid: bool,
+    pub anonymity_set_state: String,
+    pub ring_members: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+fn invalid_anonymous_verification(
+    ring_members: Vec<String>,
+    error: impl Into<String>,
+) -> AnonymousVerificationInfo {
+    AnonymousVerificationInfo {
+        crypto_valid: false,
+        anonymity_set_state: "invalid".to_string(),
+        ring_members,
+        error: Some(error.into()),
+    }
+}
+
+fn anonymous_ring_is_canonical_sorted(ring: &[[u8; 32]]) -> bool {
+    ring.windows(2).all(|window| window[0] < window[1])
+}
+
+fn canonical_pubkey_hex(value: &str) -> Result<String, String> {
+    let trimmed = value.trim();
+    let canonical = PublicKey::from_hex(trimmed)
+        .map(|pubkey| pubkey.to_hex().to_ascii_lowercase())
+        .map_err(|error| format!("invalid pubkey: {error}"))?;
+    if trimmed != canonical {
+        return Err("pubkey must be canonical lowercase 32-byte x-only hex".to_string());
+    }
+    Ok(canonical)
+}
+
+fn anonymous_ring_pubkeys(
+    current_member_pubkeys: &[String],
+    selected_ring_pubkeys: Option<&[String]>,
+    signer_pubkey: &str,
+) -> Result<Vec<String>, String> {
+    let current_members: std::collections::HashSet<String> = current_member_pubkeys
+        .iter()
+        .map(|pubkey| canonical_pubkey_hex(pubkey))
+        .collect::<Result<_, _>>()?;
+
+    let supplied_ring = selected_ring_pubkeys.is_some();
+    let ring_source = match selected_ring_pubkeys {
+        Some(selected_ring_pubkeys) => {
+            if selected_ring_pubkeys.is_empty() {
+                return Err("anonymous ring cannot be empty".to_string());
+            }
+            selected_ring_pubkeys
+        }
+        None => current_member_pubkeys,
+    };
+
+    let mut seen = std::collections::HashSet::new();
+    let mut ring = Vec::with_capacity(ring_source.len());
+    for pubkey in ring_source {
+        let pubkey = canonical_pubkey_hex(pubkey)?;
+        if !seen.insert(pubkey.clone()) {
+            return Err("anonymous ring cannot contain duplicate pubkeys".to_string());
+        }
+        if !current_members.contains(&pubkey) {
+            return Err("anonymous ring must contain only current channel members".to_string());
+        }
+        ring.push(pubkey);
+    }
+
+    if ring.len() < buzz_ring_sig_pkg::MIN_RING_SIZE {
+        return Err(format!(
+            "anonymous ring must contain at least {} distinct current members",
+            buzz_ring_sig_pkg::MIN_RING_SIZE
+        ));
+    }
+    let mut sorted_ring = ring.clone();
+    sorted_ring.sort();
+    if supplied_ring {
+        if ring != sorted_ring {
+            return Err("anonymous ring must be sorted by canonical pubkey".to_string());
+        }
+    } else {
+        ring = sorted_ring;
+    }
+    if !ring.iter().any(|pubkey| pubkey == signer_pubkey) {
+        return Err("anonymous ring must include the active identity".to_string());
+    }
+    buzz_ring_sig_pkg::validate_ring_hex(&ring)
+        .map_err(|error| format!("invalid anonymous ring: {error}"))?;
+    Ok(ring)
+}
+
+async fn fetch_current_member_pubkeys(
+    channel_id: &str,
+    state: &AppState,
+) -> Result<Vec<String>, String> {
+    let events = query_relay(
+        state,
+        &[serde_json::json!({
+            "kinds": [buzz_core_pkg::kind::KIND_NIP29_GROUP_MEMBERS],
+            "#d": [channel_id],
+            "limit": 1
+        })],
+    )
+    .await?;
+
+    let response = events
+        .first()
+        .map(nostr_convert::channel_members_from_event)
+        .transpose()?
+        .ok_or_else(|| "channel members not found".to_string())?;
+
+    Ok(response
+        .members
+        .iter()
+        .map(|member| member.pubkey.to_ascii_lowercase())
+        .collect())
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn build_signed_anonymous_channel_message(
+    channel_uuid: uuid::Uuid,
+    content: &str,
+    thread_ref: Option<&events::ThreadRef>,
+    mention_refs: &[&str],
+    media: &[Vec<String>],
+    emoji: &[Vec<String>],
+    mention_refs_only: &[Vec<String>],
+    selected_ring_pubkeys: Option<&[String]>,
+    state: &AppState,
+) -> Result<(nostr::EventBuilder, Keys, u64), String> {
+    let channel_id = channel_uuid.to_string();
+    let signer_keys = state
+        .keys
+        .lock()
+        .map_err(|error| error.to_string())?
+        .clone();
+    let current_member_pubkeys = fetch_current_member_pubkeys(&channel_id, state).await?;
+    let signer_pubkey = signer_keys.public_key().to_hex().to_ascii_lowercase();
+    let ring_pubkeys = anonymous_ring_pubkeys(
+        &current_member_pubkeys,
+        selected_ring_pubkeys,
+        &signer_pubkey,
+    )?;
+    let signer_index = ring_pubkeys
+        .iter()
+        .position(|pubkey| pubkey == &signer_pubkey)
+        .ok_or_else(|| {
+            "anonymous send requires the active identity to be a channel member".to_string()
+        })?;
+
+    let created_at = chrono::Utc::now().timestamp() as u64;
+    let body = events::build_anonymous_message_unsigned_body(
+        channel_uuid,
+        content,
+        created_at,
+        thread_ref,
+        mention_refs,
+        media,
+        emoji,
+        mention_refs_only,
+    )?;
+    let secret_key32: [u8; 32] = signer_keys
+        .secret_key()
+        .as_secret_bytes()
+        .try_into()
+        .map_err(|_| "active identity secret key must be 32 bytes".to_string())?;
+    let aux_rand32: [u8; 32] = rand::random();
+    let artifact = buzz_ring_sig_pkg::sign_with_aux(
+        &channel_id,
+        &body,
+        &ring_pubkeys,
+        signer_index,
+        secret_key32,
+        aux_rand32,
+    )
+    .map_err(|error| format!("failed to sign anonymous message: {error}"))?;
+
+    let builder = events::build_anonymous_message(
+        channel_uuid,
+        content,
+        created_at,
+        thread_ref,
+        mention_refs,
+        media,
+        emoji,
+        mention_refs_only,
+        &artifact.to_hex(),
+    )?;
+
+    let posting_keys = Keys::generate();
+
+    Ok((builder, posting_keys, created_at))
+}
+
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
 pub async fn send_channel_message(
@@ -276,6 +564,7 @@ pub async fn send_channel_message(
     mention_tags: Option<Vec<Vec<String>>>,
     mention_pubkeys: Option<Vec<String>>,
     kind: Option<u32>,
+    anonymous_ring_pubkeys: Option<Vec<String>>,
     state: State<'_, AppState>,
 ) -> Result<SendChannelMessageResponse, String> {
     let channel_uuid = uuid::Uuid::parse_str(&channel_id)
@@ -288,6 +577,8 @@ pub async fn send_channel_message(
     let kind_num = kind.unwrap_or(buzz_core_pkg::kind::KIND_STREAM_MESSAGE);
 
     let mut resolved_root: Option<String> = None;
+    let mut explicit_keys: Option<Keys> = None;
+    let mut response_created_at = chrono::Utc::now().timestamp();
 
     let builder = match kind_num {
         buzz_core_pkg::kind::KIND_FORUM_POST => events::build_forum_post(
@@ -312,6 +603,31 @@ pub async fn send_channel_message(
                 &mention_refs_only,
             )?
         }
+        buzz_core_pkg::kind::KIND_STREAM_MESSAGE_ANON => {
+            let thread_ref = match parent_event_id.as_deref() {
+                Some(pid) => {
+                    let tr = resolve_thread_ref(pid, &state).await?;
+                    resolved_root = Some(tr.root_event_id.to_hex());
+                    Some(tr)
+                }
+                None => None,
+            };
+            let (builder, keys, created_at) = build_signed_anonymous_channel_message(
+                channel_uuid,
+                content.trim(),
+                thread_ref.as_ref(),
+                &mention_refs,
+                &media,
+                &emoji,
+                &mention_refs_only,
+                anonymous_ring_pubkeys.as_deref(),
+                &state,
+            )
+            .await?;
+            explicit_keys = Some(keys);
+            response_created_at = created_at as i64;
+            builder
+        }
         _ => {
             let thread_ref = match parent_event_id.as_deref() {
                 Some(pid) => {
@@ -333,7 +649,11 @@ pub async fn send_channel_message(
         }
     };
 
-    let result = submit_event(builder, &state).await?;
+    let result = if let Some(keys) = explicit_keys.as_ref() {
+        submit_event_with_keys(builder, &state, keys, None).await?
+    } else {
+        submit_event(builder, &state).await?
+    };
 
     let depth = match (&parent_event_id, &resolved_root) {
         (None, _) => 0,
@@ -347,8 +667,90 @@ pub async fn send_channel_message(
         root_event_id: resolved_root,
         parent_event_id,
         depth,
-        created_at: chrono::Utc::now().timestamp(),
+        created_at: response_created_at,
     })
+}
+
+#[tauri::command]
+pub fn verify_anonymous_event(
+    event_json: String,
+    channel_id: Option<String>,
+    member_pubkeys: Option<Vec<String>>,
+) -> Result<AnonymousVerificationInfo, String> {
+    let event =
+        Event::from_json(event_json).map_err(|error| format!("invalid event json: {error}"))?;
+    if event.kind.as_u16() as u32 != buzz_core_pkg::kind::KIND_STREAM_MESSAGE_ANON {
+        return Ok(invalid_anonymous_verification(
+            Vec::new(),
+            "event is not kind:40009",
+        ));
+    }
+
+    let artifact_hex = match single_ring_sig_artifact(&event) {
+        Ok(artifact_hex) => artifact_hex,
+        Err(error) => return Ok(invalid_anonymous_verification(Vec::new(), error)),
+    };
+    let channel_id = match bound_anonymous_channel_id(&event, channel_id.as_deref()) {
+        Ok(channel_id) => channel_id,
+        Err(error) => return Ok(invalid_anonymous_verification(Vec::new(), error)),
+    };
+    let artifact = match buzz_ring_sig_pkg::SagArtifact::from_hex(artifact_hex) {
+        Ok(artifact) => artifact,
+        Err(error) => {
+            return Ok(invalid_anonymous_verification(
+                Vec::new(),
+                format!("invalid ring signature artifact: {error}"),
+            ));
+        }
+    };
+    let ring_members: Vec<String> = artifact.ring().iter().map(hex::encode).collect();
+    if !anonymous_ring_is_canonical_sorted(artifact.ring()) {
+        return Ok(invalid_anonymous_verification(
+            ring_members,
+            "kind:40009 anonymous signature ring must be canonical sorted".to_string(),
+        ));
+    }
+    let outer_pubkey = event.pubkey.to_hex().to_ascii_lowercase();
+    if ring_members.iter().any(|member| member == &outer_pubkey) {
+        return Ok(invalid_anonymous_verification(
+            ring_members,
+            "kind:40009 outer pubkey must be ephemeral, not a ring member".to_string(),
+        ));
+    }
+
+    let body = unsigned_body_from_event(&event);
+    let normalized_members: Vec<String> = member_pubkeys
+        .unwrap_or_default()
+        .into_iter()
+        .map(|pubkey| pubkey.to_ascii_lowercase())
+        .collect();
+    if normalized_members
+        .iter()
+        .any(|member| member == &outer_pubkey)
+    {
+        return Ok(invalid_anonymous_verification(
+            ring_members,
+            "kind:40009 outer pubkey must be ephemeral, not a current channel member".to_string(),
+        ));
+    }
+    let membership = if normalized_members.is_empty() {
+        buzz_ring_sig_pkg::MembershipCheck::Unchecked
+    } else {
+        buzz_ring_sig_pkg::MembershipCheck::CurrentMembersOnly(&normalized_members)
+    };
+
+    match buzz_ring_sig_pkg::verify_artifact(&channel_id, &body, &artifact, membership) {
+        Ok(result) => Ok(AnonymousVerificationInfo {
+            crypto_valid: result.crypto_valid,
+            anonymity_set_state: anonymity_set_state_name(result.anonymity_set_state).to_string(),
+            ring_members,
+            error: None,
+        }),
+        Err(error) => Ok(invalid_anonymous_verification(
+            ring_members,
+            format!("anonymous signature verification failed: {error}"),
+        )),
+    }
 }
 
 fn event_has_client_marker(event: &Event, marker: &str) -> bool {
@@ -543,6 +945,457 @@ pub async fn send_managed_agent_channel_message(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn signed_anon_event_with_tags(tags: Vec<Vec<&str>>) -> Event {
+        let tags = tags
+            .into_iter()
+            .map(|tag| nostr::Tag::parse(tag).expect("tag should parse"))
+            .collect::<Vec<_>>();
+        nostr::EventBuilder::new(
+            nostr::Kind::Custom(buzz_core_pkg::kind::KIND_STREAM_MESSAGE_ANON as u16),
+            "anon",
+        )
+        .tags(tags)
+        .sign_with_keys(&Keys::generate())
+        .expect("event should sign")
+    }
+
+    fn test_secret(byte: u8) -> [u8; 32] {
+        let mut secret = [0u8; 32];
+        secret[31] = byte;
+        secret
+    }
+
+    fn test_keys(byte: u8) -> Keys {
+        Keys::new(nostr::SecretKey::from_slice(&test_secret(byte)).unwrap())
+    }
+
+    fn signed_valid_anonymous_event(
+        channel_id: uuid::Uuid,
+        signer_keys: &Keys,
+        outer_keys: &Keys,
+        ring_pubkeys: &[String],
+    ) -> Event {
+        let content = "anonymous hello";
+        let created_at = 1_782_250_000u64;
+        let channel = channel_id.to_string();
+        let body = buzz_ring_sig_pkg::UnsignedEventBody {
+            created_at,
+            kind: buzz_core_pkg::kind::KIND_STREAM_MESSAGE_ANON as u64,
+            tags: vec![vec!["h".to_string(), channel.clone()]],
+            content: content.to_string(),
+        };
+        let signer_pubkey = signer_keys.public_key().to_hex().to_ascii_lowercase();
+        let signer_index = ring_pubkeys
+            .iter()
+            .position(|pubkey| pubkey == &signer_pubkey)
+            .expect("signer should be in ring");
+        let secret_key32: [u8; 32] = signer_keys
+            .secret_key()
+            .as_secret_bytes()
+            .try_into()
+            .expect("test key is 32 bytes");
+        let artifact = buzz_ring_sig_pkg::sign_with_aux(
+            &channel,
+            &body,
+            ring_pubkeys,
+            signer_index,
+            secret_key32,
+            [7u8; 32],
+        )
+        .expect("anonymous signature should sign");
+        let h_tag = nostr::Tag::parse(["h", channel.as_str()]).unwrap();
+        let ring_sig_tag = nostr::Tag::parse([
+            buzz_ring_sig_pkg::RING_SIG_TAG,
+            artifact.to_hex().as_str(),
+            buzz_ring_sig_pkg::SCHEME_ID,
+        ])
+        .unwrap();
+
+        nostr::EventBuilder::new(
+            nostr::Kind::Custom(buzz_core_pkg::kind::KIND_STREAM_MESSAGE_ANON as u16),
+            content,
+        )
+        .tags([h_tag, ring_sig_tag])
+        .custom_created_at(nostr::Timestamp::from(created_at))
+        .sign_with_keys(outer_keys)
+        .unwrap()
+    }
+
+    #[test]
+    fn single_ring_sig_artifact_requires_exactly_one_marked_tag() {
+        let event = signed_anon_event_with_tags(vec![vec![
+            buzz_ring_sig_pkg::RING_SIG_TAG,
+            "artifact",
+            buzz_ring_sig_pkg::SCHEME_ID,
+        ]]);
+        assert_eq!(single_ring_sig_artifact(&event), Ok("artifact"));
+
+        let duplicate = signed_anon_event_with_tags(vec![
+            vec![
+                buzz_ring_sig_pkg::RING_SIG_TAG,
+                "artifact",
+                buzz_ring_sig_pkg::SCHEME_ID,
+            ],
+            vec![
+                buzz_ring_sig_pkg::RING_SIG_TAG,
+                "other",
+                buzz_ring_sig_pkg::SCHEME_ID,
+            ],
+        ]);
+        assert!(single_ring_sig_artifact(&duplicate).is_err());
+
+        let wrong_marker = signed_anon_event_with_tags(vec![vec![
+            buzz_ring_sig_pkg::RING_SIG_TAG,
+            "artifact",
+            "other-scheme",
+        ]]);
+        assert!(single_ring_sig_artifact(&wrong_marker).is_err());
+    }
+
+    #[test]
+    fn bound_anonymous_channel_id_rejects_supplied_channel_mismatch() {
+        let event_channel_id = uuid::Uuid::new_v4().to_string();
+        let supplied_channel_id = uuid::Uuid::new_v4().to_string();
+        let event = signed_anon_event_with_tags(vec![
+            vec!["h", &event_channel_id],
+            vec![
+                buzz_ring_sig_pkg::RING_SIG_TAG,
+                "artifact",
+                buzz_ring_sig_pkg::SCHEME_ID,
+            ],
+        ]);
+
+        assert!(bound_anonymous_channel_id(&event, Some(&supplied_channel_id)).is_err());
+    }
+
+    #[test]
+    fn bound_anonymous_channel_id_rejects_missing_h_even_with_supplied_channel() {
+        let supplied_channel_id = uuid::Uuid::new_v4().to_string();
+        let event = signed_anon_event_with_tags(vec![vec![
+            buzz_ring_sig_pkg::RING_SIG_TAG,
+            "artifact",
+            buzz_ring_sig_pkg::SCHEME_ID,
+        ]]);
+
+        assert!(bound_anonymous_channel_id(&event, Some(&supplied_channel_id)).is_err());
+    }
+
+    #[test]
+    fn anonymous_ring_pubkeys_accepts_canonical_selected_order() {
+        let signer_keys = test_keys(1);
+        let other_member_keys = test_keys(2);
+        let third_member_keys = test_keys(3);
+        let current_members = vec![
+            signer_keys.public_key().to_hex().to_ascii_lowercase(),
+            other_member_keys.public_key().to_hex().to_ascii_lowercase(),
+            third_member_keys.public_key().to_hex().to_ascii_lowercase(),
+        ];
+        let mut selected = vec![
+            other_member_keys.public_key().to_hex().to_ascii_lowercase(),
+            signer_keys.public_key().to_hex().to_ascii_lowercase(),
+        ];
+        selected.sort();
+
+        let ring = anonymous_ring_pubkeys(
+            &current_members,
+            Some(&selected),
+            &signer_keys.public_key().to_hex().to_ascii_lowercase(),
+        )
+        .expect("selected ring should validate");
+
+        assert_eq!(ring, selected);
+    }
+
+    #[test]
+    fn anonymous_ring_pubkeys_rejects_noncanonical_selected_order() {
+        let signer_keys = test_keys(1);
+        let other_member_keys = test_keys(2);
+        let current_members = vec![
+            signer_keys.public_key().to_hex().to_ascii_lowercase(),
+            other_member_keys.public_key().to_hex().to_ascii_lowercase(),
+        ];
+        let mut selected = vec![
+            other_member_keys.public_key().to_hex().to_ascii_lowercase(),
+            signer_keys.public_key().to_hex().to_ascii_lowercase(),
+        ];
+        selected.sort();
+        selected.reverse();
+
+        let err = anonymous_ring_pubkeys(
+            &current_members,
+            Some(&selected),
+            &signer_keys.public_key().to_hex().to_ascii_lowercase(),
+        )
+        .expect_err("noncanonical ring order should be rejected");
+
+        assert!(err.contains("sorted"));
+    }
+
+    #[test]
+    fn anonymous_ring_pubkeys_round_trips_selected_ring_to_artifact() {
+        let channel_id = uuid::Uuid::parse_str("2114f4bc-5130-4816-83da-acbfcc65243b").unwrap();
+        let signer_keys = test_keys(1);
+        let other_member_keys = test_keys(2);
+        let third_member_keys = test_keys(3);
+        let outer_keys = test_keys(4);
+        let current_members = vec![
+            signer_keys.public_key().to_hex().to_ascii_lowercase(),
+            other_member_keys.public_key().to_hex().to_ascii_lowercase(),
+            third_member_keys.public_key().to_hex().to_ascii_lowercase(),
+        ];
+        let mut selected = vec![
+            other_member_keys.public_key().to_hex().to_ascii_lowercase(),
+            signer_keys.public_key().to_hex().to_ascii_lowercase(),
+        ];
+        selected.sort();
+
+        let ring = anonymous_ring_pubkeys(
+            &current_members,
+            Some(&selected),
+            &signer_keys.public_key().to_hex().to_ascii_lowercase(),
+        )
+        .expect("selected ring should validate");
+        let event = signed_valid_anonymous_event(channel_id, &signer_keys, &outer_keys, &ring);
+        let artifact =
+            buzz_ring_sig_pkg::SagArtifact::from_hex(single_ring_sig_artifact(&event).unwrap())
+                .expect("artifact should parse");
+        let artifact_ring: Vec<String> = artifact.ring().iter().map(hex::encode).collect();
+
+        assert_eq!(artifact_ring, selected);
+    }
+
+    #[test]
+    fn anonymous_ring_pubkeys_rejects_duplicate_selected_members() {
+        let signer_keys = test_keys(1);
+        let other_member_keys = test_keys(2);
+        let current_members = vec![
+            signer_keys.public_key().to_hex().to_ascii_lowercase(),
+            other_member_keys.public_key().to_hex().to_ascii_lowercase(),
+        ];
+        let selected = vec![
+            signer_keys.public_key().to_hex(),
+            signer_keys.public_key().to_hex(),
+        ];
+
+        let err = anonymous_ring_pubkeys(
+            &current_members,
+            Some(&selected),
+            &signer_keys.public_key().to_hex().to_ascii_lowercase(),
+        )
+        .expect_err("duplicate ring members should be rejected");
+
+        assert!(err.contains("duplicate"));
+    }
+
+    #[test]
+    fn anonymous_ring_pubkeys_rejects_non_current_member() {
+        let signer_keys = test_keys(1);
+        let non_member_keys = test_keys(2);
+        let other_member_keys = test_keys(3);
+        let current_members = vec![
+            signer_keys.public_key().to_hex().to_ascii_lowercase(),
+            other_member_keys.public_key().to_hex().to_ascii_lowercase(),
+        ];
+        let selected = vec![
+            signer_keys.public_key().to_hex(),
+            non_member_keys.public_key().to_hex(),
+        ];
+
+        let err = anonymous_ring_pubkeys(
+            &current_members,
+            Some(&selected),
+            &signer_keys.public_key().to_hex().to_ascii_lowercase(),
+        )
+        .expect_err("non-member ring key should be rejected");
+
+        assert!(err.contains("current channel members"));
+    }
+
+    #[test]
+    fn anonymous_ring_pubkeys_rejects_noncanonical_selected_member() {
+        let signer_keys = test_keys(1);
+        let other_member_keys = test_keys(2);
+        let current_members = vec![
+            signer_keys.public_key().to_hex().to_ascii_lowercase(),
+            other_member_keys.public_key().to_hex().to_ascii_lowercase(),
+        ];
+        let selected = vec![
+            signer_keys.public_key().to_hex().to_ascii_uppercase(),
+            other_member_keys.public_key().to_hex().to_ascii_lowercase(),
+        ];
+
+        let err = anonymous_ring_pubkeys(
+            &current_members,
+            Some(&selected),
+            &signer_keys.public_key().to_hex().to_ascii_lowercase(),
+        )
+        .expect_err("noncanonical ring key should be rejected");
+
+        assert!(err.contains("canonical lowercase"));
+    }
+
+    #[test]
+    fn anonymous_ring_pubkeys_rejects_invalid_selected_member() {
+        let signer_keys = test_keys(1);
+        let other_member_keys = test_keys(2);
+        let current_members = vec![
+            signer_keys.public_key().to_hex().to_ascii_lowercase(),
+            other_member_keys.public_key().to_hex().to_ascii_lowercase(),
+        ];
+        let selected = vec![
+            signer_keys.public_key().to_hex(),
+            "not-a-pubkey".to_string(),
+        ];
+
+        let err = anonymous_ring_pubkeys(
+            &current_members,
+            Some(&selected),
+            &signer_keys.public_key().to_hex().to_ascii_lowercase(),
+        )
+        .expect_err("invalid ring key should be rejected");
+
+        assert!(err.contains("invalid pubkey"));
+    }
+
+    #[test]
+    fn anonymous_ring_pubkeys_rejects_one_member_ring() {
+        let signer_keys = test_keys(1);
+        let other_member_keys = test_keys(2);
+        let current_members = vec![
+            signer_keys.public_key().to_hex().to_ascii_lowercase(),
+            other_member_keys.public_key().to_hex().to_ascii_lowercase(),
+        ];
+        let selected = vec![signer_keys.public_key().to_hex()];
+
+        let err = anonymous_ring_pubkeys(
+            &current_members,
+            Some(&selected),
+            &signer_keys.public_key().to_hex().to_ascii_lowercase(),
+        )
+        .expect_err("one-member ring should be rejected");
+
+        assert!(err.contains("at least 2"));
+    }
+
+    #[test]
+    fn anonymous_ring_pubkeys_rejects_missing_signer() {
+        let signer_keys = test_keys(1);
+        let other_member_keys = test_keys(2);
+        let third_member_keys = test_keys(3);
+        let current_members = vec![
+            signer_keys.public_key().to_hex().to_ascii_lowercase(),
+            other_member_keys.public_key().to_hex().to_ascii_lowercase(),
+            third_member_keys.public_key().to_hex().to_ascii_lowercase(),
+        ];
+        let selected = vec![
+            other_member_keys.public_key().to_hex(),
+            third_member_keys.public_key().to_hex(),
+        ];
+
+        let err = anonymous_ring_pubkeys(
+            &current_members,
+            Some(&selected),
+            &signer_keys.public_key().to_hex().to_ascii_lowercase(),
+        )
+        .expect_err("ring without active identity should be rejected");
+
+        assert!(err.contains("active identity"));
+    }
+
+    #[test]
+    fn verify_anonymous_event_rejects_outer_pubkey_in_ring() {
+        let channel_id = uuid::Uuid::parse_str("2114f4bc-5130-4816-83da-acbfcc65243b").unwrap();
+        let signer_keys = test_keys(1);
+        let other_member_keys = test_keys(2);
+        let ring_pubkeys = vec![
+            signer_keys.public_key().to_hex().to_ascii_lowercase(),
+            other_member_keys.public_key().to_hex().to_ascii_lowercase(),
+        ];
+        let event =
+            signed_valid_anonymous_event(channel_id, &signer_keys, &signer_keys, &ring_pubkeys);
+
+        let info = verify_anonymous_event(event.as_json(), Some(channel_id.to_string()), None)
+            .expect("verification command should return a DTO");
+
+        assert!(!info.crypto_valid);
+        assert_eq!(info.anonymity_set_state, "invalid");
+        assert_eq!(info.ring_members, ring_pubkeys);
+        assert!(
+            info.error
+                .as_deref()
+                .is_some_and(|error| error.contains("outer pubkey must be ephemeral")),
+            "unexpected error: {:?}",
+            info.error
+        );
+    }
+
+    #[test]
+    fn verify_anonymous_event_rejects_unsorted_ring() {
+        let channel_id = uuid::Uuid::parse_str("2114f4bc-5130-4816-83da-acbfcc65243b").unwrap();
+        let signer_keys = test_keys(1);
+        let other_member_keys = test_keys(2);
+        let outer_keys = test_keys(3);
+        let mut ring_pubkeys = vec![
+            signer_keys.public_key().to_hex().to_ascii_lowercase(),
+            other_member_keys.public_key().to_hex().to_ascii_lowercase(),
+        ];
+        ring_pubkeys.sort();
+        ring_pubkeys.reverse();
+        let event =
+            signed_valid_anonymous_event(channel_id, &signer_keys, &outer_keys, &ring_pubkeys);
+
+        let info = verify_anonymous_event(event.as_json(), Some(channel_id.to_string()), None)
+            .expect("verification command should return a DTO");
+
+        assert!(!info.crypto_valid);
+        assert_eq!(info.anonymity_set_state, "invalid");
+        assert_eq!(info.ring_members, ring_pubkeys);
+        assert!(
+            info.error
+                .as_deref()
+                .is_some_and(|error| error.contains("canonical sorted")),
+            "unexpected error: {:?}",
+            info.error
+        );
+    }
+
+    #[test]
+    fn verify_anonymous_event_rejects_outer_pubkey_in_supplied_current_members() {
+        let channel_id = uuid::Uuid::parse_str("2114f4bc-5130-4816-83da-acbfcc65243b").unwrap();
+        let signer_keys = test_keys(1);
+        let other_member_keys = test_keys(2);
+        let outer_keys = test_keys(3);
+        let ring_pubkeys = vec![
+            signer_keys.public_key().to_hex().to_ascii_lowercase(),
+            other_member_keys.public_key().to_hex().to_ascii_lowercase(),
+        ];
+        let current_members = vec![
+            signer_keys.public_key().to_hex().to_ascii_lowercase(),
+            other_member_keys.public_key().to_hex().to_ascii_lowercase(),
+            outer_keys.public_key().to_hex().to_ascii_lowercase(),
+        ];
+        let event =
+            signed_valid_anonymous_event(channel_id, &signer_keys, &outer_keys, &ring_pubkeys);
+
+        let info = verify_anonymous_event(
+            event.as_json(),
+            Some(channel_id.to_string()),
+            Some(current_members),
+        )
+        .expect("verification command should return a DTO");
+
+        assert!(!info.crypto_valid);
+        assert_eq!(info.anonymity_set_state, "invalid");
+        assert_eq!(info.ring_members, ring_pubkeys);
+        assert!(
+            info.error
+                .as_deref()
+                .is_some_and(|error| error.contains("current channel member")),
+            "unexpected error: {:?}",
+            info.error
+        );
+    }
 
     #[test]
     fn marker_author_scope_defaults_to_agent() {
