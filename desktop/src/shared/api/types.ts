@@ -158,6 +158,19 @@ export type UserStatus = {
 
 export type UserStatusLookup = Record<string, UserStatus | null>;
 
+export type AnonymousAnonymitySetState =
+  | "member_verified"
+  | "unchecked_or_stale"
+  | "non_member"
+  | "invalid";
+
+export type AnonymousSignatureInfo = {
+  cryptoValid: boolean;
+  anonymitySetState: AnonymousAnonymitySetState;
+  ringMembers: string[];
+  error?: string | null;
+};
+
 export type RelayEvent = {
   id: string;
   /** Local-only render identity for optimistic events that are later acknowledged. */
@@ -169,6 +182,7 @@ export type RelayEvent = {
   content: string;
   sig: string;
   pending?: boolean;
+  anonymousSignature?: AnonymousSignatureInfo;
 };
 
 export type SendChannelMessageResult = {

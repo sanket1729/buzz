@@ -3,6 +3,11 @@ import { Bot, Hash, LogIn, Plus, Sparkles, UserPlus } from "lucide-react";
 
 import { useMediaUpload } from "@/features/messages/lib/useMediaUpload";
 import { MessageComposer } from "@/features/messages/ui/MessageComposer";
+import { AnonArmedBar } from "@/features/messages/ui/AnonArmedBar";
+import { AnonComposeToggle } from "@/features/messages/ui/AnonComposeToggle";
+import { AnonRingPicker } from "@/features/messages/ui/AnonRingPicker";
+import { useAnonCompose } from "@/features/messages/lib/useAnonCompose";
+import { normalizePubkey } from "@/shared/lib/pubkey";
 import { DropZoneOverlay } from "@/features/messages/ui/ComposerAttachments";
 import {
   MessageThreadPanel,
@@ -118,6 +123,12 @@ type ChannelPaneProps = {
     mentionPubkeys: string[],
     mediaTags?: string[][],
   ) => Promise<void>;
+  onSendAnonymous?: (
+    content: string,
+    mentionPubkeys: string[],
+    mediaTags: string[][] | undefined,
+    ringPubkeys: string[],
+  ) => Promise<void>;
   onSendVideoReviewComment?: (
     message: TimelineMessage,
     content: string,
@@ -223,6 +234,7 @@ export const ChannelPane = React.memo(function ChannelPane({
   onResetThreadPanelWidth,
   onSelectThreadReplyTarget,
   onSendMessage,
+  onSendAnonymous,
   onSendVideoReviewComment,
   onSendThreadReply,
   onThreadScrollTargetResolved,
@@ -417,6 +429,16 @@ export const ChannelPane = React.memo(function ChannelPane({
     clearWelcomeComposerDismissTimer,
     isActiveWelcomeChannel,
   ]);
+  const anon = useAnonCompose(activeChannel?.id ?? null);
+  // Anonymous send is offered only on regular channels the user is a member of.
+  const allowAnonymousSend =
+    !!onSendAnonymous &&
+    !!currentPubkey &&
+    activeChannel !== null &&
+    activeChannel.channelType !== "forum" &&
+    activeChannel.channelType !== "dm" &&
+    !activeChannel.archivedAt &&
+    activeChannel.isMember;
   const handleSendMessage = React.useCallback(
     async (
       content: string,
@@ -429,16 +451,39 @@ export const ChannelPane = React.memo(function ChannelPane({
           mentionsKnownAgent(mentionPubkeys, knownAgentPubkeys));
 
       messageTimelineRef.current?.scrollToBottomOnNextUpdate();
-      await onSendMessage(content, mentionPubkeys, mediaTags);
+      if (anon.armed) {
+        // Fail closed: an armed anonymous send must NEVER downgrade to a normal
+        // send. Send only if the ring is still valid (≥2 incl. the signer);
+        // otherwise abort and let the user re-pick.
+        if (!allowAnonymousSend || !onSendAnonymous) {
+          console.error("Anonymous send blocked: unavailable in this channel");
+          return;
+        }
+
+        const me = currentPubkey ? normalizePubkey(currentPubkey) : null;
+        if (anon.ring.length >= 2 && me !== null && anon.ring.includes(me)) {
+          await onSendAnonymous(content, mentionPubkeys, mediaTags, anon.ring);
+          anon.reset();
+        } else {
+          console.error("Anonymous send blocked: invalid ring state");
+          return;
+        }
+      } else {
+        await onSendMessage(content, mentionPubkeys, mediaTags);
+      }
 
       if (shouldCompleteWelcomeBanner) {
         completeWelcomeComposerBanner();
       }
     },
     [
+      anon,
+      allowAnonymousSend,
       completeWelcomeComposerBanner,
+      currentPubkey,
       isActiveWelcomeChannel,
       knownAgentPubkeys,
+      onSendAnonymous,
       onSendMessage,
     ],
   );
@@ -749,8 +794,26 @@ export const ChannelPane = React.memo(function ChannelPane({
                 {isActiveWelcomeChannel ? (
                   <WelcomeComposerBanner state={welcomeComposerBannerState} />
                 ) : null}
+                {allowAnonymousSend && anon.armed ? (
+                  <AnonArmedBar
+                    className="mx-5"
+                    onDisarm={anon.disarm}
+                    onEdit={anon.openPicker}
+                    ringSize={anon.ring.length}
+                  />
+                ) : null}
                 <MessageComposer
                   channelId={activeChannel?.id ?? null}
+                  toolbarExtraActions={
+                    allowAnonymousSend ? (
+                      <AnonComposeToggle
+                        armed={anon.armed}
+                        onClick={() =>
+                          anon.armed ? anon.disarm() : anon.openPicker()
+                        }
+                      />
+                    ) : undefined
+                  }
                   channelName={activeChannel?.name ?? "channel"}
                   channelType={activeChannel?.channelType ?? null}
                   containerClassName="px-5"
@@ -777,6 +840,20 @@ export const ChannelPane = React.memo(function ChannelPane({
                   }
                   showTopBorder={false}
                 />
+                {allowAnonymousSend && currentPubkey ? (
+                  <AnonRingPicker
+                    channelId={activeChannel?.id ?? null}
+                    currentPubkey={currentPubkey}
+                    initialSelection={anon.ring}
+                    onConfirm={anon.confirmRing}
+                    onOpenChange={(open) => {
+                      if (!open) {
+                        anon.closePicker();
+                      }
+                    }}
+                    open={anon.pickerOpen}
+                  />
+                ) : null}
                 <div className="h-7 overflow-visible bg-background px-5 pb-1 pt-0">
                   <div className="flex h-full w-full items-center gap-2 overflow-visible">
                     {hasComposerBotActivity ? (

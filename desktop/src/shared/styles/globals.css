@@ -1138,6 +1138,13 @@
     --sidebar-accent-foreground: 234 16.02% 35.49%;
     --sidebar-border: 225 13.56% 76.86%;
     --sidebar-ring: 225 13.56% 76.86%;
+    /* Anonymous send — distinct from the identity-verified palette (UX §6). */
+    --anon-verified: 244 52% 56%;
+    --anon-verified-foreground: 0 0% 100%;
+    --anon-unconfirmed: 215 20% 35%;
+    --anon-warning: 26 90% 37%;
+    --anon-warning-bg: 48 96% 89%;
+    --anon-error: 4 76% 40%;
   }
 
   .dark {
@@ -1188,6 +1195,13 @@
     --sidebar-accent-foreground: 227 68.25% 87.65%;
     --sidebar-border: 231 15.61% 33.92%;
     --sidebar-ring: 231 15.61% 33.92%;
+    /* Anonymous send — dark counterparts (UX §6). */
+    --anon-verified: 244 60% 64%;
+    --anon-verified-foreground: 0 0% 100%;
+    --anon-unconfirmed: 215 20% 65%;
+    --anon-warning: 46 97% 65%;
+    --anon-warning-bg: 39 70% 15%;
+    --anon-error: 0 91% 71%;
   }
 
   * {

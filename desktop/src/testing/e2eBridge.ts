@@ -4416,7 +4416,7 @@ async function handleGetFeed(
   // For e2e, return a minimal feed structure with mentions.
   const limit = args.limit ?? 50;
   const mentionEvents = await relayQuery(config, [
-    { kinds: [9, 40002, 45001, 45003], "#p": [identity.pubkey], limit },
+    { kinds: [9, 40002, 40009, 45001, 45003], "#p": [identity.pubkey], limit },
   ]);
 
   // Look up channel names for feed items
@@ -5356,7 +5356,7 @@ async function handleSearchMessages(
   // NIP-50 search via POST /query
   const limit = args.limit ?? 20;
   const events = await relayQuery(config, [
-    { kinds: [9, 40002], search: args.q, limit },
+    { kinds: [9, 40002, 40009], search: args.q, limit },
   ]);
   const hits = events.map((ev) => ({
     event_id: ev.id ?? "",
@@ -5414,6 +5414,7 @@ async function handleSendChannelMessage(
     mentionPubkeys?: string[];
     mediaTags?: string[][] | null;
     emojiTags?: string[][] | null;
+    anonymousRingPubkeys?: string[] | null;
   },
   config: E2eConfig | undefined,
 ): Promise<RawSendChannelMessageResponse> {
@@ -6736,6 +6737,13 @@ export function maybeInstallE2eTauriMocks() {
           payload as Parameters<typeof handleSendChannelMessage>[0],
           activeConfig,
         );
+      case "verify_anonymous_event":
+        return {
+          cryptoValid: false,
+          anonymitySetState: "invalid",
+          ringMembers: [],
+          error: "mock bridge does not verify anonymous signatures",
+        };
       case "send_managed_agent_channel_message":
         return handleSendManagedAgentChannelMessage(
           payload as Parameters<typeof handleSendManagedAgentChannelMessage>[0],

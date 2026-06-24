@@ -29,6 +29,7 @@ import {
   KIND_NIP29_DELETE_EVENT,
   KIND_REACTION,
   KIND_STREAM_MESSAGE,
+  KIND_STREAM_MESSAGE_ANON,
   KIND_STREAM_MESSAGE_V2,
   KIND_STREAM_MESSAGE_EDIT,
   KIND_STREAM_MESSAGE_DIFF,
@@ -46,6 +47,7 @@ export function isTimelineContentEvent(event: RelayEvent) {
   return (
     event.kind === KIND_STREAM_MESSAGE ||
     event.kind === KIND_STREAM_MESSAGE_V2 ||
+    event.kind === KIND_STREAM_MESSAGE_ANON ||
     event.kind === KIND_STREAM_MESSAGE_DIFF ||
     event.kind === KIND_SYSTEM_MESSAGE ||
     event.kind === KIND_JOB_REQUEST ||
@@ -434,6 +436,9 @@ export function formatTimelineMessages(
         const reactions = reactionsByEventId.get(event.id);
         return reactions ? [...reactions.values()] : undefined;
       })(),
+      // Carried straight through from the verified event; the renderer derives
+      // authorship from this DTO, never from the posting pubkey (§7.2).
+      anonymousSignature: event.anonymousSignature,
     };
   });
 }

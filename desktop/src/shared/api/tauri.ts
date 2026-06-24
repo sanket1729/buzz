@@ -3,6 +3,7 @@ import { invoke as tauriInvoke } from "@tauri-apps/api/core";
 import type {
   AddChannelMembersInput,
   AddChannelMembersResult,
+  AnonymousSignatureInfo,
   BackendProviderCandidate,
   BackendProviderProbeResult,
   CanvasResponse,
@@ -713,6 +714,7 @@ export async function sendChannelMessage(
   kind?: number,
   emojiTags?: string[][],
   mentionTags?: string[][],
+  anonymousRingPubkeys?: string[],
 ): Promise<SendChannelMessageResult> {
   const response = await invokeTauri<RawSendChannelMessageResult>(
     "send_channel_message",
@@ -725,6 +727,7 @@ export async function sendChannelMessage(
       mentionTags: mentionTags ?? null,
       mentionPubkeys: mentionPubkeys ?? null,
       kind: kind ?? null,
+      anonymousRingPubkeys: anonymousRingPubkeys ?? null,
     },
   );
 
@@ -735,6 +738,18 @@ export async function sendChannelMessage(
     depth: response.depth,
     createdAt: response.created_at,
   };
+}
+
+export async function verifyAnonymousEvent(
+  event: RelayEvent,
+  channelId?: string | null,
+  memberPubkeys?: string[] | null,
+): Promise<AnonymousSignatureInfo> {
+  return invokeTauri<AnonymousSignatureInfo>("verify_anonymous_event", {
+    eventJson: JSON.stringify(event),
+    channelId: channelId ?? null,
+    memberPubkeys: memberPubkeys ?? null,
+  });
 }
 
 export type BlobDescriptor = {

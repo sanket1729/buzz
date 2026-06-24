@@ -7,6 +7,7 @@ import {
   KIND_JOB_REQUEST,
   KIND_JOB_RESULT,
   KIND_STREAM_MESSAGE,
+  KIND_STREAM_MESSAGE_ANON,
   KIND_STREAM_MESSAGE_DIFF,
   KIND_STREAM_MESSAGE_V2,
   KIND_SYSTEM_MESSAGE,
@@ -53,6 +54,7 @@ function isTimelineWindowContentEvent(event: RelayEvent) {
   return (
     event.kind === KIND_STREAM_MESSAGE ||
     event.kind === KIND_STREAM_MESSAGE_V2 ||
+    event.kind === KIND_STREAM_MESSAGE_ANON ||
     event.kind === KIND_STREAM_MESSAGE_DIFF ||
     event.kind === KIND_SYSTEM_MESSAGE ||
     event.kind === KIND_JOB_REQUEST ||

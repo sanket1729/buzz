@@ -1,3 +1,5 @@
+import type { AnonymousSignatureInfo } from "@/shared/api/types";
+
 export type TimelineReaction = {
   emoji: string;
   /** Custom (image) emoji URL from the reaction's NIP-30 `emoji` tag, if any. */
@@ -36,4 +38,11 @@ export type TimelineMessage = {
   kind?: number;
   tags?: string[][];
   reactions?: TimelineReaction[];
+  /**
+   * Ring-signature verification result for kind:40009 messages, attached during
+   * timeline enrichment. Undefined for ordinary messages, or for a 40009 event
+   * whose signature has not been verified yet. Carries no author/pubkey field
+   * by construction (§7.2).
+   */
+  anonymousSignature?: AnonymousSignatureInfo;
 };

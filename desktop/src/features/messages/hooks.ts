@@ -32,6 +32,7 @@ import type { Channel, Identity, RelayEvent } from "@/shared/api/types";
 // from the on-render overlay.
 import { applyEditTagOverlay } from "@/features/messages/lib/applyEditTagOverlay.mjs";
 import { backfillAuxForMessages } from "@/features/messages/lib/auxBackfill";
+import { backfillAnonymousSignatures } from "@/features/messages/lib/anonSignatureBackfill";
 import { countTopLevelTimelineRows } from "@/features/messages/lib/formatTimelineMessages";
 import {
   MIN_TOP_LEVEL_ROWS_PER_FETCH,
@@ -39,6 +40,7 @@ import {
 } from "@/features/messages/lib/pageOlderMessages";
 import {
   KIND_STREAM_MESSAGE,
+  KIND_STREAM_MESSAGE_ANON,
   KIND_SYSTEM_MESSAGE,
 } from "@/shared/constants/kinds";
 
@@ -195,6 +197,9 @@ export function useChannelMessagesQuery(channel: Channel | null) {
       // Paint messages immediately; backfill their reactions/edits/deletions
       // by `#e` in the background (it self-merges into the same cache key).
       void backfillAuxForMessages(queryClient, channel.id, history);
+      // Verify ring signatures for any kind:40009 events and attach the result
+      // (self-merges into the same cache key; filters to 40009 internally).
+      void backfillAnonymousSignatures(queryClient, channel.id, history);
 
       // Seed the cache, then — only if the cold window renders thinner than a
       // normal scroll page — top it up to the same visible-row floor. A
@@ -237,6 +242,7 @@ export function useChannelSubscription(channel: Channel | null) {
     );
 
     void backfillAuxForMessages(queryClient, channelId, history);
+    void backfillAnonymousSignatures(queryClient, channelId, history);
   });
 
   const appendMessage = useEffectEvent((event: RelayEvent) => {
@@ -248,6 +254,9 @@ export function useChannelSubscription(channel: Channel | null) {
       channelMessagesKey(channelId),
       (current = []) => mergeTimelineCacheMessages(current, event),
     );
+
+    // A live anonymous message needs its ring signature verified too.
+    void backfillAnonymousSignatures(queryClient, channelId, [event]);
 
     if (event.kind === KIND_SYSTEM_MESSAGE) {
       try {
@@ -341,6 +350,10 @@ export function useSendMessageMutation(
       mentionPubkeys?: string[];
       parentEventId?: string | null;
       mediaTags?: string[][];
+      /** kind:40009 for an anonymous ring-signed send; default kind otherwise. */
+      kind?: number;
+      /** Canonical sorted ring (incl. signer) for an anonymous send. */
+      anonymousRingPubkeys?: string[];
     },
     MessageQueryContext | undefined
   >({
@@ -349,6 +362,8 @@ export function useSendMessageMutation(
       mentionPubkeys,
       parentEventId,
       mediaTags,
+      kind,
+      anonymousRingPubkeys,
     }) => {
       if (!channel || channel.channelType === "forum") {
         throw new Error("This channel does not support message sending yet.");
@@ -356,6 +371,52 @@ export function useSendMessageMutation(
 
       if (!identity) {
         throw new Error("No identity available for sending messages.");
+      }
+
+      const isAnonymousSend =
+        kind === KIND_STREAM_MESSAGE_ANON || anonymousRingPubkeys !== undefined;
+
+      const {
+        mediaTags: anonImetaTags,
+        emojiTags: anonEmojiTags,
+        mentionTags: anonMentionTags,
+      } = splitOutgoingTags(mediaTags);
+
+      // Anonymous (ring-signed) sends MUST go through REST so the Rust producer
+      // signs the ring and emits kind:40009 with an ephemeral posting key. Never
+      // the WS path (it carries no kind/ring), and never fall back to a normal
+      // send — fail closed (RING_SIG_SCHEME §7.2/§7.3; crypto-review gate).
+      if (isAnonymousSend) {
+        if (!anonymousRingPubkeys || anonymousRingPubkeys.length === 0) {
+          throw new Error("Anonymous send requires a selected ring.");
+        }
+
+        const result = await sendChannelMessage(
+          channel.id,
+          content,
+          parentEventId ?? null,
+          anonImetaTags,
+          mentionPubkeys,
+          KIND_STREAM_MESSAGE_ANON,
+          anonEmojiTags,
+          anonMentionTags,
+          anonymousRingPubkeys,
+        );
+
+        // No optimistic/author-bearing event for anon: an optimistic row would
+        // carry the sender's real pubkey as author (§7.2 leak). onMutate skips
+        // the optimistic insert, so onSuccess (guarded on context) skips the
+        // merge; the real kind:40009 event (ephemeral pubkey) arrives via the
+        // subscription and renders through the verifier path.
+        return {
+          id: result.eventId,
+          pubkey: "",
+          created_at: result.createdAt,
+          kind: KIND_STREAM_MESSAGE_ANON,
+          tags: [["h", channel.id]],
+          content: content.trim(),
+          sig: "",
+        };
       }
 
       // `mediaTags` arrives as the merged outgoing tag set (imeta + NIP-30
@@ -436,8 +497,24 @@ export function useSendMessageMutation(
         mentionTags,
       );
     },
-    onMutate: async ({ content, mentionPubkeys, parentEventId, mediaTags }) => {
+    onMutate: async ({
+      content,
+      mentionPubkeys,
+      parentEventId,
+      mediaTags,
+      kind,
+      anonymousRingPubkeys,
+    }) => {
       if (!channel || !identity || channel.channelType === "forum") {
+        return undefined;
+      }
+
+      const isAnonymousSend =
+        kind === KIND_STREAM_MESSAGE_ANON || anonymousRingPubkeys !== undefined;
+
+      // Anonymous sends create NO optimistic event — an optimistic row would
+      // render the sender's real pubkey as author before the relay echo (§7.2).
+      if (isAnonymousSend) {
         return undefined;
       }
 

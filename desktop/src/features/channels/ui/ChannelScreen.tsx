@@ -1,5 +1,6 @@
 import * as React from "react";
 import { useAppShell } from "@/app/AppShellContext";
+import { KIND_STREAM_MESSAGE_ANON } from "@/shared/constants/kinds";
 import { useActiveChannelHeader } from "@/features/channels/useActiveChannelHeader";
 import { useChannelPaneHandlers } from "@/features/channels/useChannelPaneHandlers";
 import {
@@ -493,6 +494,26 @@ export function ChannelScreen({
     activeChannel && !activeChannel.archivedAt && activeChannel.isMember
       ? handleSendVideoReviewComment
       : undefined;
+  // Anonymous (ring-signed) send: forces REST kind:40009 with the exact
+  // canonical ring; the mutation skips the optimistic insert so the sender's
+  // pubkey never lands locally (§7.2). Fail-closed — no normal-send fallback.
+  const handleSendAnonymous = React.useCallback(
+    async (
+      content: string,
+      mentionPubkeys: string[],
+      mediaTags: string[][] | undefined,
+      ringPubkeys: string[],
+    ) => {
+      await sendMessageMutation.mutateAsync({
+        content,
+        mediaTags,
+        mentionPubkeys,
+        kind: KIND_STREAM_MESSAGE_ANON,
+        anonymousRingPubkeys: ringPubkeys,
+      });
+    },
+    [sendMessageMutation],
+  );
   const {
     channelAgentSessionAgents,
     closeAgentSession: handleCloseAgentSession,
@@ -781,6 +802,7 @@ export function ChannelScreen({
                   onOpenThread={handleOpenThreadAndCloseAgentSession}
                   onSelectThreadReplyTarget={handleSelectThreadReplyTarget}
                   onSendMessage={handleSendMessage}
+                  onSendAnonymous={handleSendAnonymous}
                   onSendVideoReviewComment={effectiveSendVideoReviewComment}
                   onSendThreadReply={handleSendThreadReply}
                   onThreadScrollTargetResolved={

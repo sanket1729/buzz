@@ -80,6 +80,16 @@ export default {
           DEFAULT: "var(--ui-warning)",
           bg: "var(--ui-warning-bg)",
         },
+        "anon-verified": {
+          DEFAULT: "hsl(var(--anon-verified))",
+          foreground: "hsl(var(--anon-verified-foreground))",
+        },
+        "anon-unconfirmed": "hsl(var(--anon-unconfirmed))",
+        "anon-warning": {
+          DEFAULT: "hsl(var(--anon-warning))",
+          bg: "hsl(var(--anon-warning-bg))",
+        },
+        "anon-error": "hsl(var(--anon-error))",
       },
     },
   },

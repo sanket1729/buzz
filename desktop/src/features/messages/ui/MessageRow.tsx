@@ -14,7 +14,13 @@ import {
   getThreadReplyIndentPx,
   THREAD_REPLY_LINE_WIDTH_PX,
 } from "@/features/messages/lib/threadTreeLayout";
-import { KIND_STREAM_MESSAGE_DIFF } from "@/shared/constants/kinds";
+import {
+  KIND_STREAM_MESSAGE_ANON,
+  KIND_STREAM_MESSAGE_DIFF,
+} from "@/shared/constants/kinds";
+import { HatGlasses } from "lucide-react";
+import { anonTreatment } from "@/features/messages/lib/anonState";
+import { AnonMessageHeader } from "@/features/messages/ui/AnonMessageHeader";
 import { cn } from "@/shared/lib/cn";
 import { normalizePubkey } from "@/shared/lib/pubkey";
 import { UserAvatar } from "@/shared/ui/UserAvatar";
@@ -336,6 +342,70 @@ export const MessageRow = React.memo(
       <MessageAuthorText as="h3">{message.author}</MessageAuthorText>
     );
 
+    // Ring-signed (kind:40009) messages render as the ring, never the posting
+    // account (§7.2). isAnon is keyed on the kind alone so the posting pubkey is
+    // never surfaced even before the signature has been verified (pending).
+    const isAnon = message.kind === KIND_STREAM_MESSAGE_ANON;
+    const anonAvatarNode = (
+      <div
+        className={cn(
+          "flex shrink-0 items-center justify-center rounded-full",
+          avatarSizeClass,
+          anonTreatment(message.anonymousSignature) === "invalid"
+            ? "bg-muted text-muted-foreground"
+            : "bg-anon-verified/10 text-anon-verified",
+        )}
+        aria-hidden
+      >
+        <HatGlasses className="h-5 w-5" />
+      </div>
+    );
+
+    // Avatar slot: anon → the mask mark with no profile popover; otherwise the
+    // existing per-pubkey avatar/popover behavior, unchanged.
+    const avatarSlot = isAnon ? (
+      <div className="flex shrink-0 items-start">{anonAvatarNode}</div>
+    ) : message.pubkey ? (
+      <UserProfilePopover
+        pubkey={message.pubkey}
+        role={message.role}
+        botIdenticonValue={message.author}
+      >
+        <button
+          className={cn(
+            "flex shrink-0 items-start focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring",
+            avatarButtonRadiusClass,
+          )}
+          type="button"
+        >
+          {avatarNode}
+        </button>
+      </UserProfilePopover>
+    ) : (
+      <div className="flex shrink-0 items-start">{avatarNode}</div>
+    );
+
+    // Header lead: anon → the ring author line + state badge (no popover, no
+    // person); otherwise the existing author button/popover, unchanged.
+    const headerLeadSlot = isAnon ? (
+      <AnonMessageHeader signature={message.anonymousSignature} />
+    ) : message.pubkey ? (
+      <UserProfilePopover
+        pubkey={message.pubkey}
+        role={message.role}
+        botIdenticonValue={message.author}
+      >
+        <button
+          className="truncate rounded leading-4 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
+          type="button"
+        >
+          {authorNode}
+        </button>
+      </UserProfilePopover>
+    ) : (
+      authorNode
+    );
+
     const actionBarNode = (
       <div
         className={cn(
@@ -610,45 +680,13 @@ export const MessageRow = React.memo(
         >
           {isThreadReplyLayout ? (
             <>
-              {message.pubkey ? (
-                <UserProfilePopover
-                  pubkey={message.pubkey}
-                  role={message.role}
-                  botIdenticonValue={message.author}
-                >
-                  <button
-                    className={cn(
-                      "flex shrink-0 items-start focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring",
-                      avatarButtonRadiusClass,
-                    )}
-                    type="button"
-                  >
-                    {avatarNode}
-                  </button>
-                </UserProfilePopover>
-              ) : (
-                <div className="flex shrink-0 items-start">{avatarNode}</div>
-              )}
+              {avatarSlot}
               <div className="flex min-w-0 flex-1 flex-col gap-0.5">
                 <MessageHeaderRow>
-                  {message.pubkey ? (
-                    <UserProfilePopover
-                      pubkey={message.pubkey}
-                      role={message.role}
-                      botIdenticonValue={message.author}
-                    >
-                      <button
-                        className="truncate rounded leading-4 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
-                        type="button"
-                      >
-                        {authorNode}
-                      </button>
-                    </UserProfilePopover>
-                  ) : (
-                    authorNode
-                  )}
+                  {headerLeadSlot}
                   {inlineMetadataNode}
-                  {message.personaDisplayName &&
+                  {!isAnon &&
+                  message.personaDisplayName &&
                   message.personaDisplayName !== message.author ? (
                     <span className="text-xs text-muted-foreground">
                       {message.personaDisplayName}
@@ -660,45 +698,13 @@ export const MessageRow = React.memo(
             </>
           ) : (
             <>
-              {message.pubkey ? (
-                <UserProfilePopover
-                  pubkey={message.pubkey}
-                  role={message.role}
-                  botIdenticonValue={message.author}
-                >
-                  <button
-                    className={cn(
-                      "flex shrink-0 items-start focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring",
-                      avatarButtonRadiusClass,
-                    )}
-                    type="button"
-                  >
-                    {avatarNode}
-                  </button>
-                </UserProfilePopover>
-              ) : (
-                <div className="flex shrink-0 items-start">{avatarNode}</div>
-              )}
+              {avatarSlot}
               <div className="flex min-w-0 flex-1 flex-col gap-0.5">
                 <MessageHeaderRow>
-                  {message.pubkey ? (
-                    <UserProfilePopover
-                      pubkey={message.pubkey}
-                      role={message.role}
-                      botIdenticonValue={message.author}
-                    >
-                      <button
-                        className="truncate rounded leading-4 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
-                        type="button"
-                      >
-                        {authorNode}
-                      </button>
-                    </UserProfilePopover>
-                  ) : (
-                    authorNode
-                  )}
+                  {headerLeadSlot}
                   {inlineMetadataNode}
-                  {message.personaDisplayName &&
+                  {!isAnon &&
+                  message.personaDisplayName &&
                   message.personaDisplayName !== message.author ? (
                     <span className="text-xs text-muted-foreground">
                       {message.personaDisplayName}
@@ -729,6 +735,7 @@ export const MessageRow = React.memo(
     prev.message.pending === next.message.pending &&
     prev.message.edited === next.message.edited &&
     prev.message.reactions === next.message.reactions &&
+    prev.message.anonymousSignature === next.message.anonymousSignature &&
     prev.message.tags === next.message.tags &&
     prev.message.role === next.message.role &&
     prev.message.personaDisplayName === next.message.personaDisplayName &&
