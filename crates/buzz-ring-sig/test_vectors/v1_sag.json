@@ -1,0 +1,165 @@
+{
+  "schema_version": 1,
+  "scheme_id": "buzz-ring-sag-v1",
+  "cases": [
+    {
+      "name": "valid",
+      "description": "Concrete v1 SAG artifact verifies for the bound channel, body, and timestamp-backed membership evidence.",
+      "expected": "accept",
+      "channel_id": "2114f4bc-5130-4816-83da-acbfcc65243b",
+      "created_at": 1782250000,
+      "kind": 9,
+      "tags": [
+        ["h", "2114f4bc-5130-4816-83da-acbfcc65243b"],
+        ["ring_sig", "ignored"]
+      ],
+      "content": "anonymous hello",
+      "ring": [
+        "79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
+        "c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5",
+        "f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f9"
+      ],
+      "artifact_hex": "0101000379be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f9e93763a8ce0ff0f97334ad1b144ce091f645a6523fc2ff37b8e42987d82aa350133c19fd4fb51929b3b9834b04d935c42312adb0b0902e052e47e4ebe872015a29848e4b26395121caf749ed842f251211be9cfbfa169f888464b4cf24506937c835ac10cf69f40d669ec7afad364d03cc525a73d41d40b4a67337119112c0ec"
+    },
+    {
+      "name": "reject-altered-content",
+      "description": "Changing message content must change msg_hash and break ring closure.",
+      "expected": "reject",
+      "expected_error": "invalid-signature",
+      "channel_id": "2114f4bc-5130-4816-83da-acbfcc65243b",
+      "created_at": 1782250000,
+      "kind": 9,
+      "tags": [
+        ["h", "2114f4bc-5130-4816-83da-acbfcc65243b"],
+        ["ring_sig", "ignored"]
+      ],
+      "content": "tampered hello",
+      "ring": [
+        "79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
+        "c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5",
+        "f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f9"
+      ],
+      "artifact_hex": "0101000379be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f9e93763a8ce0ff0f97334ad1b144ce091f645a6523fc2ff37b8e42987d82aa350133c19fd4fb51929b3b9834b04d935c42312adb0b0902e052e47e4ebe872015a29848e4b26395121caf749ed842f251211be9cfbfa169f888464b4cf24506937c835ac10cf69f40d669ec7afad364d03cc525a73d41d40b4a67337119112c0ec"
+    },
+    {
+      "name": "reject-altered-channel",
+      "description": "Changing the bound channel id must break verification.",
+      "expected": "reject",
+      "expected_error": "invalid-signature",
+      "channel_id": "00000000-0000-4000-8000-000000000001",
+      "created_at": 1782250000,
+      "kind": 9,
+      "tags": [
+        ["h", "2114f4bc-5130-4816-83da-acbfcc65243b"],
+        ["ring_sig", "ignored"]
+      ],
+      "content": "anonymous hello",
+      "ring": [
+        "79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
+        "c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5",
+        "f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f9"
+      ],
+      "artifact_hex": "0101000379be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f9e93763a8ce0ff0f97334ad1b144ce091f645a6523fc2ff37b8e42987d82aa350133c19fd4fb51929b3b9834b04d935c42312adb0b0902e052e47e4ebe872015a29848e4b26395121caf749ed842f251211be9cfbfa169f888464b4cf24506937c835ac10cf69f40d669ec7afad364d03cc525a73d41d40b4a67337119112c0ec"
+    },
+    {
+      "name": "reject-reordered-ring",
+      "description": "Verifier must consume the as-presented artifact ring order; reordering changes ring_hash and breaks ring closure.",
+      "expected": "reject",
+      "expected_error": "invalid-signature",
+      "channel_id": "2114f4bc-5130-4816-83da-acbfcc65243b",
+      "created_at": 1782250000,
+      "kind": 9,
+      "tags": [
+        ["h", "2114f4bc-5130-4816-83da-acbfcc65243b"],
+        ["ring_sig", "ignored"]
+      ],
+      "content": "anonymous hello",
+      "ring": [
+        "c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5",
+        "79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
+        "f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f9"
+      ],
+      "artifact_hex": "01010003c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee579be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f9e93763a8ce0ff0f97334ad1b144ce091f645a6523fc2ff37b8e42987d82aa350133c19fd4fb51929b3b9834b04d935c42312adb0b0902e052e47e4ebe872015a29848e4b26395121caf749ed842f251211be9cfbfa169f888464b4cf24506937c835ac10cf69f40d669ec7afad364d03cc525a73d41d40b4a67337119112c0ec"
+    },
+    {
+      "name": "reject-duplicate-key",
+      "description": "Duplicate artifact ring keys shrink the anonymity set and must be rejected.",
+      "expected": "reject",
+      "expected_error": "duplicate-ring-pubkey",
+      "channel_id": "2114f4bc-5130-4816-83da-acbfcc65243b",
+      "created_at": 1782250000,
+      "kind": 9,
+      "tags": [
+        ["h", "2114f4bc-5130-4816-83da-acbfcc65243b"],
+        ["ring_sig", "ignored"]
+      ],
+      "content": "anonymous hello",
+      "ring": [
+        "79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
+        "79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
+        "f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f9"
+      ],
+      "artifact_hex": "0101000379be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f8179879be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f9e93763a8ce0ff0f97334ad1b144ce091f645a6523fc2ff37b8e42987d82aa350133c19fd4fb51929b3b9834b04d935c42312adb0b0902e052e47e4ebe872015a29848e4b26395121caf749ed842f251211be9cfbfa169f888464b4cf24506937c835ac10cf69f40d669ec7afad364d03cc525a73d41d40b4a67337119112c0ec"
+    },
+    {
+      "name": "reject-invalid-pubkey",
+      "description": "Canonical hex x-only pubkey encodings that fail BIP-340 lift_x must be rejected.",
+      "expected": "reject",
+      "expected_error": "invalid-pubkey",
+      "channel_id": "2114f4bc-5130-4816-83da-acbfcc65243b",
+      "created_at": 1782250000,
+      "kind": 9,
+      "tags": [
+        ["h", "2114f4bc-5130-4816-83da-acbfcc65243b"],
+        ["ring_sig", "ignored"]
+      ],
+      "content": "anonymous hello",
+      "ring": [
+        "79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
+        "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        "f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f9"
+      ],
+      "artifact_hex": "0101000379be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f9e93763a8ce0ff0f97334ad1b144ce091f645a6523fc2ff37b8e42987d82aa350133c19fd4fb51929b3b9834b04d935c42312adb0b0902e052e47e4ebe872015a29848e4b26395121caf749ed842f251211be9cfbfa169f888464b4cf24506937c835ac10cf69f40d669ec7afad364d03cc525a73d41d40b4a67337119112c0ec"
+    },
+    {
+      "name": "reject-wrong-scheme",
+      "description": "v1 verification accepts only SAG scheme byte 0x01; bLSAG/reserved 0x02 must reject.",
+      "expected": "reject",
+      "expected_error": "unsupported-scheme",
+      "channel_id": "2114f4bc-5130-4816-83da-acbfcc65243b",
+      "created_at": 1782250000,
+      "kind": 9,
+      "tags": [
+        ["h", "2114f4bc-5130-4816-83da-acbfcc65243b"],
+        ["ring_sig", "ignored"]
+      ],
+      "content": "anonymous hello",
+      "ring": [
+        "79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
+        "c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5",
+        "f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f9"
+      ],
+      "artifact_hex": "0102000379be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f9e93763a8ce0ff0f97334ad1b144ce091f645a6523fc2ff37b8e42987d82aa350133c19fd4fb51929b3b9834b04d935c42312adb0b0902e052e47e4ebe872015a29848e4b26395121caf749ed842f251211be9cfbfa169f888464b4cf24506937c835ac10cf69f40d669ec7afad364d03cc525a73d41d40b4a67337119112c0ec"
+    },
+    {
+      "name": "reject-malformed-scalar",
+      "description": "A c0 scalar equal to the secp256k1 group order q must be rejected.",
+      "expected": "reject",
+      "expected_error": "invalid-scalar",
+      "channel_id": "2114f4bc-5130-4816-83da-acbfcc65243b",
+      "created_at": 1782250000,
+      "kind": 9,
+      "tags": [
+        ["h", "2114f4bc-5130-4816-83da-acbfcc65243b"],
+        ["ring_sig", "ignored"]
+      ],
+      "content": "anonymous hello",
+      "ring": [
+        "79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
+        "c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5",
+        "f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f9"
+      ],
+      "artifact_hex": "0101000379be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f9fffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141133c19fd4fb51929b3b9834b04d935c42312adb0b0902e052e47e4ebe872015a29848e4b26395121caf749ed842f251211be9cfbfa169f888464b4cf24506937c835ac10cf69f40d669ec7afad364d03cc525a73d41d40b4a67337119112c0ec"
+    }
+  ]
+}
