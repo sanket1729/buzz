@@ -706,6 +706,12 @@ const OUTSIDER_PUBKEY =
   "df8e91b86fda13a9a67896df77232f7bdab2ba9c3e165378e1ba3d24c13a328e";
 const PROFILE_ONLY_AGENT_PUBKEY =
   "8f83d6b7f3d74f7d933ae3a54dd8c6cc85c7f98e531c16e5a827b953441a8d67";
+// A relay-classified bot agent whose declared NIP-OA owner is the mock viewer,
+// but which is NOT locally managed. This is the fixture that exercises the
+// sidebar's owner-gate path (`viewerIsOwner`), distinct from the local-managed
+// path that `mira` (profile-only) and managed-agent fixtures cover.
+const OWNED_RELAY_AGENT_PUBKEY =
+  "a1b2c3d4e5f60718293a4b5c6d7e8f90112233445566778899aabbccddeeff00";
 const MOCK_IDENTITY_PUBKEY = DEFAULT_MOCK_IDENTITY.pubkey;
 
 const mockDisplayNames = new Map<string, string>([
@@ -714,6 +720,7 @@ const mockDisplayNames = new Map<string, string>([
   [BOB_PUBKEY, "bob"],
   [CHARLIE_PUBKEY, "charlie"],
   [PROFILE_ONLY_AGENT_PUBKEY, "mira"],
+  [OWNED_RELAY_AGENT_PUBKEY, "nadia"],
   [OUTSIDER_PUBKEY, "outsider"],
   [DEFAULT_REAL_IDENTITY.pubkey, DEFAULT_REAL_IDENTITY.username],
 ]);
@@ -721,6 +728,7 @@ const mockAgentPubkeys = new Set([
   ALICE_PUBKEY,
   CHARLIE_PUBKEY,
   PROFILE_ONLY_AGENT_PUBKEY,
+  OWNED_RELAY_AGENT_PUBKEY,
 ]);
 
 function isoMinutesAgo(minutesAgo: number): string {
@@ -1385,6 +1393,7 @@ const mockChannels: MockChannel[] = [
     members: [
       createMockMember(MOCK_IDENTITY_PUBKEY, "owner", 1000),
       createMockMember(CHARLIE_PUBKEY, "bot", 800),
+      createMockMember(OWNED_RELAY_AGENT_PUBKEY, "member", 600),
     ],
   }),
   createMockChannel({
@@ -1585,6 +1594,16 @@ let mockRelayAgents: RawRelayAgent[] = [
     channel_ids: ["9a1657ac-f7aa-5db0-b632-d8bbeb6dfb50"],
     capabilities: ["code", "reviews"],
     status: "away",
+    respond_to: "anyone",
+  },
+  {
+    pubkey: OWNED_RELAY_AGENT_PUBKEY,
+    name: "nadia",
+    agent_type: "goose",
+    channels: ["agents"],
+    channel_ids: ["94a444a4-c0a3-5966-ab05-530c6ddc2301"],
+    capabilities: ["search", "summaries"],
+    status: "online",
     respond_to: "anyone",
   },
 ];
@@ -1833,6 +1852,18 @@ const mockProfiles = new Map<string, RawProfile>([
       is_agent: true,
     },
   ],
+  [
+    OWNED_RELAY_AGENT_PUBKEY,
+    {
+      pubkey: OWNED_RELAY_AGENT_PUBKEY,
+      display_name: "nadia",
+      avatar_url: null,
+      about: null,
+      nip05_handle: null,
+      owner_pubkey: MOCK_IDENTITY_PUBKEY,
+      is_agent: true,
+    },
+  ],
 ]);
 const mockPresence = new Map<string, PresenceStatus>([
   [MOCK_IDENTITY_PUBKEY, "offline"],
@@ -1841,6 +1872,7 @@ const mockPresence = new Map<string, PresenceStatus>([
   [BOB_PUBKEY, "away"],
   [CHARLIE_PUBKEY, "online"],
   [PROFILE_ONLY_AGENT_PUBKEY, "online"],
+  [OWNED_RELAY_AGENT_PUBKEY, "online"],
   [OUTSIDER_PUBKEY, "offline"],
 ]);
 const mockFeedOverrides: RawHomeFeedResponse["feed"] = {
