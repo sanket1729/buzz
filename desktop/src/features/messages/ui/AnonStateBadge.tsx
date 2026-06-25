@@ -1,9 +1,4 @@
-import {
-  BadgeCheck,
-  CircleDashed,
-  CircleSlash,
-  TriangleAlert,
-} from "lucide-react";
+import { BadgeCheck, CircleDashed, CircleSlash } from "lucide-react";
 
 import type { AnonTreatment } from "@/features/messages/lib/anonState";
 import { cn } from "@/shared/lib/cn";
@@ -16,20 +11,10 @@ type BadgeSpec = {
 };
 
 const BADGES: Record<Exclude<AnonTreatment, "pending">, BadgeSpec> = {
-  member: {
-    label: "Verified member",
+  valid: {
+    label: "Ring verified",
     Icon: BadgeCheck,
     tone: "bg-anon-verified text-anon-verified-foreground",
-  },
-  unconfirmed: {
-    label: "Unconfirmed",
-    Icon: CircleDashed,
-    tone: "border border-anon-unconfirmed text-anon-unconfirmed",
-  },
-  non_member: {
-    label: "Not a member post",
-    Icon: TriangleAlert,
-    tone: "border border-anon-warning bg-anon-warning-bg text-anon-warning",
   },
   invalid: {
     // §5.6: no trust badge — quiet, de-emphasized, no fill.

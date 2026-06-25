@@ -16,9 +16,7 @@ function shortKey(pubkey: string): string {
 }
 
 const HEADLINE: Record<AnonTreatment, (n: number) => string> = {
-  member: (n) => `Anonymous member · 1 of ${n}`,
-  unconfirmed: (n) => `Anonymous · 1 of ${n} · set unconfirmed`,
-  non_member: () => "Anonymous · ring includes a non-member",
+  valid: (n) => `Anonymous · 1 of ${n}`,
   invalid: () => "Signature failed — treat as unsigned",
   pending: (n) => (n > 0 ? `Anonymous · 1 of ${n}` : "Anonymous"),
 };
